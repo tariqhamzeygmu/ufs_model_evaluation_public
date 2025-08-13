@@ -164,10 +164,10 @@ class Regrid:
         batches = resample.datetime_batcher(all_times)
         resample_args = [(dataset, slice(batch[0], batch[1]), freq) for batch in batches]
 
-	result = []
-	for resample_arg in resample_args:
-		print(f'Processing {resample_arg[1]}')
-		result.append(resample.resample(resample_arg[0], resample_arg[1], resample_arg[2]))
+        result = []
+        for resample_arg in resample_args:
+                print(f'Processing {resample_arg[1]}')
+                result.append(resample.resample(resample_arg[0], resample_arg[1], resample_arg[2]))
 
         # -- MULTIPROCESS --
         #p = mp.Pool(n_cores)
