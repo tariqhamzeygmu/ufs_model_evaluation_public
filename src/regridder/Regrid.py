@@ -154,7 +154,7 @@ class Regrid:
         # If multiple cores are available we can speed of computation significantly.
         # If only one core is available, then this code will still work.
         # n_cores = len(os.sched_getaffinity(0))
-	n_cores = 2
+        n_cores = 2
         print(f'Number of cores available: {n_cores}')
 
         # Get all times in dataset
