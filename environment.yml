@@ -64,7 +64,7 @@ dependencies:
   - cftime=1.6.4=py310hf462985_1
   - charset-normalizer=3.4.3=pyhd8ed1ab_0
   - click=8.2.1=pyh707e725_0
-  - climpred=2.4.0=pyhd8ed1ab_0
+  - climpred
   - cloudpickle=3.1.1=pyhd8ed1ab_0
   - comm=0.2.3=pyhe01879c_0
   - contourpy=1.3.2=py310h3788b33_0
@@ -245,9 +245,9 @@ dependencies:
   - nlohmann_json=3.12.0=h3f2d84a_0
   - notebook=7.4.5=pyhd8ed1ab_0
   - notebook-shim=0.2.4=pyhd8ed1ab_1
-  - numba=0.61.2=py310h8648a56_1
+  - numba=0.60.0
   - numcodecs=0.13.1=py310h5eaa309_0
-  - numpy=2.2.6=py310hefbff90_0
+  - numpy=2.1.3
   - oauthlib=3.3.1=pyhd8ed1ab_0
   - openjpeg=2.5.3=h55fea9a_1
   - openssl=3.5.2=h26f9b46_0
