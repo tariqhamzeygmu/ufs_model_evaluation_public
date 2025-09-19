@@ -1,4 +1,12 @@
+# ---------------------------------------------------------------------------------------------------------------------
+#  Filename: datareader.py
+#  Created by: Tariq Hamzey, Cristiana Stan
+#  Created on: 19 Sept. 2025
+#  Purpose: This is the API endpoint for DataReader object construction.
+# ---------------------------------------------------------------------------------------------------------------------
+
 import importlib
+
 
 def getDataReader(datasource, **kwargs):
 

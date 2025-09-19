@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+
 def time_offset(freq_unit, init, lead, step):
 
     if freq_unit == 'MS':

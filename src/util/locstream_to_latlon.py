@@ -27,7 +27,7 @@ def locstream_to_latlon(locstream: Union[xr.Dataset, xr.DataArray]) -> Union[xr.
     regridder = xe.Regridder(
         locs,
         target_latlon_grid,
-        'nearest_s2d', # <-- Ensure every target grid cell has a value (but beware the imputation)
+        'nearest_s2d',  # <-- Ensure every target grid cell has a value (but beware the imputation)
         locstream_in=True,
         reuse_weights=False
     )
@@ -35,4 +35,4 @@ def locstream_to_latlon(locstream: Union[xr.Dataset, xr.DataArray]) -> Union[xr.
     print("DEBUG: Regridder instantiated. Now running regridder.")
 
     # Regrid to lat-lon
-     return regridder(locstream)
+    return regridder(locstream)

@@ -1,9 +1,19 @@
+# ---------------------------------------------------------------------------------------------------------------------
+#  Filename: DataReader_Super.py
+#  Created by: Tariq Hamzey, Cristiana Stan
+#  Created on: 19 Sept. 2025
+#  Purpose: Define the DataReader superclass.
+# ---------------------------------------------------------------------------------------------------------------------
+
 from abc import ABC, abstractmethod
 from typing import Union, List, Tuple
 from posixpath import join as urljoin
 import datetime
 import pandas as pd
 import xarray as xr
+
+from ..util import util
+
 
 class DataReader(ABC):
     '''Abstract: Reads and contains datasets for various data assimilation modeling systems.'''
@@ -31,7 +41,7 @@ class DataReader(ABC):
         self._set_retrieve_params(**{})
 
         # relabel dimensions and order coordinate axes
-        self.dataset = DataReader.standardize_coords(self.dataset)
+        self._dataset = DataReader.standardize_coords(self._dataset)
 
         print(f'Dataset ready.')
 
@@ -39,6 +49,12 @@ class DataReader(ABC):
     def _read_dataset(self):
         '''Read data from the given address'''
         pass
+
+    def dataset_url(self):
+        return self._dataset_url
+
+    def dataset(self):
+        return self._dataset
 
     @staticmethod
     def to_datetime(time_str: Union[str, datetime.datetime]) -> datetime.datetime:
@@ -79,18 +95,16 @@ class DataReader(ABC):
 
         # First check if data actually need to be sorted.
         if sorted(list(ds.lon.values)) != list(ds.lon.values):
-            print(f'Sorting lon ascending')
             ds = ds.sortby('lon', ascending=True)
 
         if sorted(list(ds.lat.values), reverse=True) != list(ds.lat.values):
-            print(f'Sorting lat descending')
             ds = ds.sortby('lat', ascending=False)
 
         # Enforce a dimension order such that lat always comes before lon
         # We need to do this because ERA5 datasets can be inconsistent,
         # and because u-v analysis extracts the underlying the numpy arrays.
         # Easiest to ensure consistent shape here.
-        # Don't mess with the other dimensions.
+        # Do the same for init+lead too.
 
         dims = list(ds.dims)
         # Assume lat and lon adjacency
@@ -122,32 +136,41 @@ class DataReader(ABC):
         if change_order is True:
             ds = ds.transpose(*dims)  # Reorder
 
+            # Transpose only affects the underlying data arrays, not the dataset.
+            # As a stickler, I insist on enforcing Dataset.dims order.
+            # Be vigilent for possible side effects of the following (https://github.com/pydata/xarray/issues/9921):
+            ds = xr.Dataset(
+                data_vars={k: v for k, v in ds.data_vars.items()},
+                coords=ds.coords,
+                attrs=ds.attrs,
+            )
+
         return ds
 
     def info(self):
-        if self.dataset is None:
+        if self._dataset is None:
             print("Dataset not available")
             return
-        print(self.dataset)
+        print(self._dataset)
 
     def list_variables(self):
-        if self.dataset is None:
+        if self._dataset is None:
             print("Dataset not available")
             return
         print("Available variables:")
-        print(list(self.dataset.variables))
+        print(util.print_fixed_width(list(self._dataset.keys())))
 
     def describe(self, var_name: str = None):
-        if self.dataset is None:
+        if self._dataset is None:
             print("Dataset not available")
             return
 
         if var_name:
             # Describe single variable
-            if var_name not in self.dataset.data_vars:
+            if var_name not in self._dataset.data_vars:
                 print(f"Variable '{var_name}' not found")
                 return
-            var = self.dataset[var_name]
+            var = self._dataset[var_name]
             print(f"\nVariable: {var_name}")
             print(f"Dimensions: {var.dims}")
             print(f"Shape: {var.shape}")
@@ -157,7 +180,7 @@ class DataReader(ABC):
         else:
             # Describe all variables in a tabular format
             summary = []
-            for name, var in self.dataset.data_vars.items():
+            for name, var in self._dataset.data_vars.items():
                 dims = ", ".join(var.dims)
                 shape = " × ".join(str(s) for s in var.shape)
 
@@ -173,17 +196,41 @@ class DataReader(ABC):
             df = pd.DataFrame(summary, columns=["Variable", "Dimensions", "Shape", "Description", "Units"])
             display(df)
 
-    def _get_model_dims(self):
+    def get_vertical_dims(self):
         # These are UFS models, other systems may not have definitions and that's okay.
         models = {
             "atm": {"level_dim": "lev", "depth_dim": "depthBelowLandLayer"},
             "ocn": {"depth_dim": "depth"},
             "lnd": {"depth_dim": "depthBelowLandLayer"},
-            "ice": {}, 
+            "ice": {},
             "wav": {}
         }
 
         return models.get(getattr(self, 'model', 'dummy'), {})
+
+    def is_flat(self, dataset=None):
+
+        '''
+        This is a rather naive way to determine if geospatial data are flat.
+        Effective usage depends on resetting/dropping coords if e.g. 1 level is retrieved.
+        If an external Xarray dataset is supplied, then bypass this data_reader's dataset.
+        '''
+        if dataset is None:
+            all_coords = set(list(self._dataset.coords))
+        else:
+            all_coords = set(list(dataset.coords))
+
+        # Assume these are the possible vertical coordinates we could encounter.
+        # May need to update this if new coordinates are encountered.
+        vertical_coords = {'lev', 'hybrid', 'depth', 'depthBelowLandLayer'}
+
+        # If there are zero vertical_coords in this dataset, then flat.
+        if vertical_coords.isdisjoint(all_coords) is True:
+            return True, list(vertical_coords)
+
+        # Else there is/are vertical coordinates, return them.
+        else:
+            return False, list(vertical_coords.intersection(all_coords))
 
     #######################################################################################################
     '''
@@ -193,30 +240,28 @@ class DataReader(ABC):
     def _set_retrieve_params(self, **kwargs):
 
         self._retrieve_params = {
-            'var':       kwargs.get('var',       None),
-            'lat':       kwargs.get('lat',       None),
-            'lon':       kwargs.get('lon',       None),
-            'time':      kwargs.get('time',      None),
-            'lev':       kwargs.get('lev',       None),
-
-            'depth':     kwargs.get('depth',     None),
-            'member':    kwargs.get('member',    None),
-            'lead':      kwargs.get('lead',      None),
-            'ens_avg':   kwargs.get('ens_avg',   None),
-
-            'mean':      kwargs.get('mean',      None),
-            'std':       kwargs.get('std',       None),
+            'var': kwargs.get('var', None),
+            'lat': kwargs.get('lat', None),
+            'lon': kwargs.get('lon', None),
+            'time': kwargs.get('time', None),
+            'lev': kwargs.get('lev', None),
+            'depth': kwargs.get('depth', None),
+            'member': kwargs.get('member', None),
+            'lead': kwargs.get('lead', None),
+            'ens_avg': kwargs.get('ens_avg', None),
+            'mean': kwargs.get('mean', None),
+            'std': kwargs.get('std', None),
             'save_path': kwargs.get('save_path', None)
         }
 
-    def _get_retrieve_params(self):
+    def retrieve_params(self):
         return self._retrieve_params
 
     #######################################################################################################
     def retrieve(self, **kwargs) -> xr.Dataset:
 
         # Store old retrieve params
-        old_params = self._get_retrieve_params()
+        old_params = self.retrieve_params()
 
         try:
             # Set new params, revert to old if retrieve() fails
@@ -248,25 +293,25 @@ class DataReader(ABC):
         '''
 
         # Store all sel parameters in a dictionary, then call sel at the end.
-        #sel_dict = {}
- 
-        params = self._get_retrieve_params()
+        params = self.retrieve_params()
 
-        if self.dataset is None:
+        if self._dataset is None:
             raise RuntimeError("Dataset failed to load during initialization")
 
         # var always a list
         var = params['var']
         if var is None:
-            raise ValueError(f'Missing retrieve parameter: var (str, List[str])\nYou must specify a variable name or list of variable names to retrieve.')
+            msg = f'Missing retrieve parameter: var (str, List[str])\n'
+            msg += f'You must specify a variable name or list of variable names to retrieve.'
+            raise ValueError(msg)
 
         var_list = [var] if isinstance(var, str) else var
-        missing = [v for v in var_list if v not in self.dataset]
+        missing = [v for v in var_list if v not in self._dataset]
         if missing:
             raise ValueError(f"Variables not found: {missing}")
 
         # First subset dataset by var
-        data = self.dataset[var_list]
+        data = self._dataset[var_list]
 
         # Latitude selection
         lat = params['lat']
@@ -274,8 +319,6 @@ class DataReader(ABC):
             print('Slicing by lat')
             if isinstance(lat, (tuple, list)):
                 lat_slice = sorted(lat, reverse=True)
-                # if not DataReader.is_ascending(data.lat):  # <-- Can assume correct order if standardize_coords is run first.
-                #     lat_slice = lat_slice[::-1]
                 data = data.sel(lat=slice(*lat_slice))
             else:
                 data = data.sel(lat=lat, method='nearest')
@@ -312,13 +355,13 @@ class DataReader(ABC):
                     start = DataReader.to_datetime(time[0])
                     end = DataReader.to_datetime(time[1])
                     data = data.sel(time=slice(start, end))
-                    #sel_dict['time'] = slice(start, end)
+                    # sel_dict['time'] = slice(start, end)
                 else:
                     time_val = DataReader.to_datetime(time)
                     data = data.sel(time=time_val, method='nearest')
 
         # Model-specific vertical selection
-        model_dims = self._get_model_dims()
+        model_dims = self.get_vertical_dims()
 
         lev = params['lev']
         # For UFS levels
@@ -327,7 +370,7 @@ class DataReader(ABC):
             if isinstance(lev, (tuple, list)):
                 data = data.sel({model_dims["level_dim"]: slice(*lev)})
             else:
-                data = data.sel({model_dims["level_dim"]: lev}, method='nearest') # <-- Get rid of "nearest"? We must be exact?
+                data = data.sel({model_dims["level_dim"]: lev})  # Do not use method=nearest
 
         # For other Vertical levels
         elif lev is not None:
@@ -338,20 +381,21 @@ class DataReader(ABC):
             elif 'lev' in data.dims:
                 vertical_dim = 'lev'
             else:
-                raise ValueError(
-                    f"""You specified lev={lev}, but there is no vertical dimension (hybrid or lev) found in the dataset.
-                    For variable(s) [{', '.join(list(data.keys()))}] the available dims are [{', '.join(list(data.dims))}]
-                    """
-                )
+                msg = f"You specified lev={lev}, but there is no vertical dimension (hybrid or lev)"
+                msg += f" found in this dataset. For variable(s) "
+                msg += f"{[', '.join(list(data.keys()))]} the available dims are "
+                msg += f"{[', '.join(list(data.dims))]}"
+                raise ValueError(msg)
+
             print(f'Slicing by {vertical_dim}')
 
             if isinstance(lev, (tuple, list)):
                 data = data.sel(**{vertical_dim: slice(*lev)})
             else:
-                data = data.sel(**{vertical_dim: lev}, method='nearest')
-                #sel_dict['lev'] = lev
+                data = data.sel(**{vertical_dim: lev})  # Do not use method=nearest
+                # sel_dict['lev'] = lev
 
-        #data = data.sel(**sel_dict)  # <-- Revisit this.  We may have better performance with 1 sel operation.
+        # data = data.sel(**sel_dict)  # <-- Revisit this.  We may have better performance with 1 sel operation.
 
         # Depth
         depth = params['depth']
@@ -360,7 +404,7 @@ class DataReader(ABC):
             if isinstance(depth, (tuple, list)):
                 data = data.sel({model_dims["depth_dim"]: slice(*depth)})
             else:
-                data = data.sel({model_dims["depth_dim"]: depth}, method='nearest')
+                data = data.sel({model_dims["depth_dim"]: depth})  # Do not use method=nearest
 
         # Ensemble member and lead time
         member = params['member']
@@ -369,7 +413,7 @@ class DataReader(ABC):
             if isinstance(member, (tuple, list)):
                 data = data.sel(member=slice(*member))
             else:
-                data = data.sel(member=member, method='nearest')
+                data = data.sel(member=member)  # Do not use method=nearest
 
         lead = params['lead']
         if lead is not None and 'lead' in data.dims:
@@ -377,7 +421,7 @@ class DataReader(ABC):
             if isinstance(lead, (tuple, list)):
                 data = data.sel(lead=slice(*lead))
             else:
-                data = data.sel(lead=lead, method='nearest')
+                data = data.sel(lead=lead)  # Do not use method=nearest
 
         # Ensemble average
         ens_avg = params['ens_avg']
@@ -425,34 +469,3 @@ class DataReader(ABC):
 
         # Always return dataSET, even for 1 variable
         return data
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

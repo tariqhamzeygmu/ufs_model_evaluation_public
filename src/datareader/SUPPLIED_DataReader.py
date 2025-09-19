@@ -1,6 +1,9 @@
-##
-## SUPPLIED Data Reader
-##
+# ---------------------------------------------------------------------------------------------------------------------
+#  Filename: SUPPLIED_DataReader.py
+#  Created by: Tariq Hamzey, Cristiana Stan
+#  Created on: 19 Sept. 2025
+#  Purpose: Define the SUPPLIED DataReader subclass.
+# ---------------------------------------------------------------------------------------------------------------------
 
 from typing import Union, List, Tuple
 from posixpath import join as urljoin
@@ -8,6 +11,7 @@ import xarray as xr
 from xarray.groupers import TimeResampler
 
 from .DataReader_Super import DataReader
+
 
 class SUPPLIED_DataReader(DataReader):
     '''Concrete: Reads and contains SUPPLIED datasets.'''
@@ -24,7 +28,8 @@ class SUPPLIED_DataReader(DataReader):
             '''
             raise ValueError(msg)
 
-        self.dataset = dataset
+        self._dataset = dataset
+        self.WINDS = kwargs.get('WINDS')
 
         super().__init__()
 

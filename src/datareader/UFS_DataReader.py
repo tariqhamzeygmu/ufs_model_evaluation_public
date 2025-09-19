@@ -1,6 +1,9 @@
-##
-## UFS Data Reader
-##
+# ---------------------------------------------------------------------------------------------------------------------
+#  Filename: UFS_DataReader.py
+#  Created by: Tariq Hamzey, Cristiana Stan
+#  Created on: 19 Sept. 2025
+#  Purpose: Define the UFS DataReader subclass.
+# ---------------------------------------------------------------------------------------------------------------------
 
 from typing import Union, List, Tuple
 from posixpath import join as urljoin
@@ -8,8 +11,13 @@ import xarray as xr
 
 from .DataReader_Super import DataReader
 
+
 class UFS_DataReader(DataReader):
-    U_WIND, V_WIND = 'uprs', 'vprs'
+    WINDS = [
+        {'U_WIND': 'uprs', 'V_WIND': 'vprs'},
+        {'U_WIND': 'u', 'V_WIND': 'v'},
+        {'U_WIND': 'u10m', 'V_WIND': 'v10m'}
+    ]
 
     '''Concrete: Reads and contains UFS datasets.'''
 
@@ -30,10 +38,8 @@ class UFS_DataReader(DataReader):
 
     def _read_dataset(self):
         try:
-            self.dataset = xr.open_zarr(self._dataset_url,
-                                        storage_options={"anon": True},
-                                        consolidated=True)
-            print(f"UFS dataset loaded.")
-
+            self._dataset = xr.open_zarr(self._dataset_url,
+                                         storage_options={"anon": True},
+                                         consolidated=True)
         except Exception as e:
             raise RuntimeError(f"Failed to load UFS dataset at address: {self._dataset_url} {e}")

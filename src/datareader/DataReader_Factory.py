@@ -1,12 +1,20 @@
+# ---------------------------------------------------------------------------------------------------------------------
+#  Filename: DataReader_Factory.py
+#  Created by: Tariq Hamzey, Cristiana Stan
+#  Created on: 19 Sept. 2025
+#  Purpose: Instantiate and return the appropriate DataReader subclass.
+# ---------------------------------------------------------------------------------------------------------------------
+
 import os
 import importlib
+
 
 class DataReader_Factory:
 
     def create_DataReader(datasource, **kwargs):
 
         # Infer data reader subclasses per file naming template <datasource>_DataReader.py
-        wd = os.path.abspath(os.path.dirname( __file__ ))
+        wd = os.path.abspath(os.path.dirname(__file__))
         filelist = os.listdir(wd)
         data_reader_filelist = [this for this in filelist if '_DataReader.py' in this]
 
@@ -27,4 +35,3 @@ class DataReader_Factory:
         data_reader = getattr(module, f'{module_name}')
 
         return data_reader(**kwargs)
-
