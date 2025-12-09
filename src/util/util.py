@@ -7,6 +7,121 @@
 
 import numpy as np
 import pandas as pd
+import xarray as xr
+from ..datareader import DataReader_Super
+from ..datareader import datareader as dr
+
+
+def retrieve_ufs_dataset(ufs_data_reader,
+                         ufs_var,
+                         time_range,
+                         members,
+                         region=None,
+                         **kwargs):
+    '''
+    This function is a wrapper around UFS_DataReader.retrieve()
+    Its main purpose is to return member data alongside the ensemble average (for all members).
+    (Normally, we get one or the other, not both together.)
+
+    members = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 'ens_avg']
+    region = {
+        'latmin': -5.0,
+        'latmax': 5.0,
+        'lonmin': 190.0,
+        'lonmax':240.0
+    }
+    '''
+
+    if region is None:
+        region = {'latmin': -90, 'latmax': 90, 'lonmin': 0, 'lonmax': 360}
+
+    datasets = []
+    for i in range(len(members)):
+
+        this_member = members[i]
+        print(f'retrieving {this_member}')
+
+        if this_member == 'ens_avg':
+            this_ds = ufs_data_reader.retrieve(
+                var=ufs_var,
+                lat=(region['latmin'], region['latmax']),
+                lon=(region['lonmin'], region['lonmax']),
+                time=time_range,
+                ens_avg=True,
+                **kwargs
+            )
+
+            this_ds = this_ds.expand_dims('member')
+            this_ds = this_ds.assign_coords({'member': [-1]})
+            datasets.append(this_ds)
+
+        else:
+            this_ds = ufs_data_reader.retrieve(
+                var=ufs_var,
+                lat=(region['latmin'], region['latmax']),
+                lon=(region['lonmin'], region['lonmax']),
+                time=time_range,
+                member=this_member,
+                **kwargs
+            )
+
+            this_ds = this_ds.expand_dims('member')
+            this_ds = this_ds.assign_coords({'member': [this_member]})
+            datasets.append(this_ds)
+
+    # End Loop
+    if len(datasets) == 0:
+        ds = None
+    elif len(datasets) == 1:
+        ds = this_ds
+    else:
+        ds = xr.concat(datasets, dim='member', coords='minimal', compat='equals')
+
+    return ds
+
+
+def combine_ufs_means(ufs_models_list,
+                      ufs_vars_list,
+                      time_range,
+                      region=None,
+                      **kwargs):
+    '''
+    Merge the ensemble means of multiple UFS models together into 1 dataset
+    In the merged dataset, each model will have a 'member' coordinate
+    '''
+    data_reader_list = []
+    for this_model in ufs_models_list:
+        this_filename = f"experiments/phase_1/{this_model}/atm_monthly.zarr"
+        this_data_reader = dr.getDataReader(datasource='UFS', filename=this_filename, model='atm')
+        data_reader_list.append(this_data_reader)
+
+    members = ['ens_avg']
+    ds_list = []
+
+    for i in range(len(data_reader_list)):
+
+        this_dr = data_reader_list[i]
+        this_member = ufs_models_list[i]
+        ufs_var = None
+
+        for this_var in ufs_vars_list:
+            if this_var in list(this_dr.dataset().keys()):
+                ufs_var = this_var
+
+        if ufs_var is None:
+            raise ValueError(f"Couldn't find variable in ufs dataset: {ufs_vars_list}")
+
+        # Get the dataset
+        this_ds = retrieve_ufs_dataset(this_dr, ufs_var, time_range, members, region=region, **kwargs)
+        this_ds = this_ds.assign_coords(member=('member', [this_member]))
+
+        this_ds = this_ds.rename_vars({ufs_var: ufs_vars_list[0]})
+
+        ds_list.append(this_ds)
+
+    ds = xr.concat(ds_list, dim='member', coords='minimal', compat='equals')
+
+    return ds
 
 
 def print_fixed_width(list_of_strings):

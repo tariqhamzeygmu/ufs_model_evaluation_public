@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Union, List, Tuple
 from posixpath import join as urljoin
 import datetime
+import numpy as np
 import pandas as pd
 import xarray as xr
 
@@ -43,7 +44,7 @@ class DataReader(ABC):
         # relabel dimensions and order coordinate axes
         self._dataset = DataReader.standardize_coords(self._dataset)
 
-        print(f'Dataset ready.')
+        # print(f'Dataset ready.')
 
     @abstractmethod
     def _read_dataset(self):
@@ -72,7 +73,7 @@ class DataReader(ABC):
     @staticmethod
     def standardize_coords(ds: Union[xr.Dataset, xr.DataArray]) -> Union[xr.Dataset, xr.DataArray]:
 
-        print(f'Standardizing coordinate system')
+        # print(f'Standardizing coordinate system')
 
         coord_map = {'latitude': 'lat', 'y': 'lat', 'longitude': 'lon', 'x': 'lon', 'level': 'lev'}
         rename_dict = {}
@@ -233,17 +234,15 @@ class DataReader(ABC):
             return False, list(vertical_coords.intersection(all_coords))
 
     #######################################################################################################
-    '''
-    1. Regrid operates on data contained by a DataReader object.
-    2. The underlying dataset is preserved.
-    '''
     def _set_retrieve_params(self, **kwargs):
+        '''These are all possible parameters for a retrieval.'''
 
         self._retrieve_params = {
             'var': kwargs.get('var', None),
             'lat': kwargs.get('lat', None),
             'lon': kwargs.get('lon', None),
             'time': kwargs.get('time', None),
+            'initmonths': kwargs.get('initmonths', None),
             'lev': kwargs.get('lev', None),
             'depth': kwargs.get('depth', None),
             'member': kwargs.get('member', None),
@@ -280,6 +279,7 @@ class DataReader(ABC):
         lat: Union[float, Tuple[float, float]] = None,
         lon: Union[float, Tuple[float, float]] = None,
         time: Union[datetime.datetime, str, Tuple] = None,
+        initmonths: Union[int, Tuple, list] = None,
         lev: Union[float, Tuple] = None,
         depth: Union[float, Tuple] = None,
         member: Union[int, Tuple] = None,
@@ -316,7 +316,7 @@ class DataReader(ABC):
         # Latitude selection
         lat = params['lat']
         if lat is not None and 'lat' in data.dims:
-            print('Slicing by lat')
+            # print('Slicing by lat')
             if isinstance(lat, (tuple, list)):
                 lat_slice = sorted(lat, reverse=True)
                 data = data.sel(lat=slice(*lat_slice))
@@ -326,7 +326,7 @@ class DataReader(ABC):
         # Longitude selection
         lon = params['lon']
         if lon is not None and 'lon' in data.dims:
-            print('Slicing by lon')
+            # print('Slicing by lon')
             if isinstance(lon, (tuple, list)):
                 lon = [l % 360 for l in lon]
                 data = data.sel(lon=slice(*sorted(lon)))
@@ -340,7 +340,7 @@ class DataReader(ABC):
 
             # Datasets could coneivably have both 'init' and 'time' dimensions
             if 'init' in data.dims:
-                print('Slicing by init')
+                # print('Slicing by init')
                 if isinstance(time, (tuple, list)):
                     start = DataReader.to_datetime(time[0])
                     end = DataReader.to_datetime(time[1])
@@ -350,7 +350,7 @@ class DataReader(ABC):
                     data = data.sel(init=time_val, method='nearest')
 
             if 'time' in data.dims:
-                print('Slicing by time')
+                # print('Slicing by time')
                 if isinstance(time, (tuple, list)):
                     start = DataReader.to_datetime(time[0])
                     end = DataReader.to_datetime(time[1])
@@ -360,13 +360,38 @@ class DataReader(ABC):
                     time_val = DataReader.to_datetime(time)
                     data = data.sel(time=time_val, method='nearest')
 
+        # Subset by init month number (int or tuple or list)
+        initmonths = params['initmonths']
+        if initmonths is not None:
+            if 'init' not in data.dims:
+                raise ValueError('This dataset does not have init dimension.')
+
+            # Coerce to tuple
+            if isinstance(initmonths, int):
+                initmonths = tuple([initmonths])
+
+            # If another data type is detected then raise error
+            if not isinstance(initmonths, (tuple, list)):
+                raise ValueError('initmonths must be a tuple or an int.')
+
+            # Get all init months in data
+            all_initmonths = list(data.groupby('init.month').groups.keys())
+
+            # Check that user-specified init months are indeed in the data
+            in_a_but_not_b = np.setdiff1d(initmonths, all_initmonths)
+            if len(in_a_but_not_b) > 0:
+                raise ValueError(f'init month not in data: {in_a_but_not_b}')
+
+            # Subset
+            data = data.where(data['init.month'].isin(initmonths), drop=True)
+
         # Model-specific vertical selection
         model_dims = self.get_vertical_dims()
 
         lev = params['lev']
         # For UFS levels
         if "level_dim" in model_dims and lev is not None and model_dims["level_dim"] in data.dims:
-            print(f"Slicing by model dimension {model_dims['level_dim']}")
+            # print(f"Slicing by model dimension {model_dims['level_dim']}")
             if isinstance(lev, (tuple, list)):
                 data = data.sel({model_dims["level_dim"]: slice(*lev)})
             else:
@@ -387,7 +412,7 @@ class DataReader(ABC):
                 msg += f"{[', '.join(list(data.dims))]}"
                 raise ValueError(msg)
 
-            print(f'Slicing by {vertical_dim}')
+            # print(f'Slicing by {vertical_dim}')
 
             if isinstance(lev, (tuple, list)):
                 data = data.sel(**{vertical_dim: slice(*lev)})
@@ -400,7 +425,7 @@ class DataReader(ABC):
         # Depth
         depth = params['depth']
         if "depth_dim" in model_dims and depth is not None and model_dims["depth_dim"] in data.dims:
-            print('Slicing by depth_dim')
+            # print('Slicing by depth_dim')
             if isinstance(depth, (tuple, list)):
                 data = data.sel({model_dims["depth_dim"]: slice(*depth)})
             else:
@@ -409,7 +434,7 @@ class DataReader(ABC):
         # Ensemble member and lead time
         member = params['member']
         if member is not None and 'member' in data.dims:
-            print('Getting member')
+            # print('Getting member')
             if isinstance(member, (tuple, list)):
                 data = data.sel(member=slice(*member))
             else:
@@ -417,7 +442,7 @@ class DataReader(ABC):
 
         lead = params['lead']
         if lead is not None and 'lead' in data.dims:
-            print('Slicing by lead')
+            # print('Slicing by lead')
             if isinstance(lead, (tuple, list)):
                 data = data.sel(lead=slice(*lead))
             else:

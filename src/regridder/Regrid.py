@@ -6,6 +6,7 @@
 # ---------------------------------------------------------------------------------------------------------------------
 
 import os
+import gc
 import time
 import warnings
 import xarray as xr
@@ -19,7 +20,7 @@ import _spherepack
 
 from ..datareader import DataReader_Super, UFS_DataReader
 from ..datareader import datareader as dr
-from ..util import util, resample, timeutil
+from ..util import util, timeutil, stats
 
 
 class Regrid:
@@ -89,29 +90,43 @@ class Regrid:
         # What if both resolutions are the same? (0)
         self._lowres_grid = 1 if self._highres_grid == 2 else 2
 
-        # Get readable data types of the data_readers to print to console, e.g. UFS_DataReader to ERA5_DataReader
-        self._type_highres = str(type(getattr(self, f'_data_reader{self._highres_grid}'))).split("'")[1].split('.')[-1]
-        self._type_lowres = str(type(getattr(self, f'_data_reader{self._lowres_grid}'))).split("'")[1].split('.')[-1]
+        # Get readable data types of the data_readers to print to console, e.g. UFS_DataReader to ERA5_DataReader.
+        if self._highres_grid != 0:
+            type_highres = str(type(getattr(self, f'_data_reader{self._highres_grid}')))
+            type_lowres = str(type(getattr(self, f'_data_reader{self._lowres_grid}')))
+        else:
+            # Arbitrary
+            type_highres = str(type(getattr(self, f'_data_reader1')))
+            type_lowres = str(type(getattr(self, f'_data_reader2')))
+
+        # Assign types
+        self._type_highres = type_highres.split("'")[1].split('.')[-1]
+        self._type_lowres = type_lowres.split("'")[1].split('.')[-1]
 
         # Resampling can be run if 1 dataset has init+lead structure and the other does not.
         if self._is_dr1_UFS is True and self._is_dr2_UFS is True:
-            self._freq_unit, self._step = self._get_lead_resolution(self._data_reader1)
+            self._freq_unit, self._step = timeutil.get_lead_resolution(self._data_reader1.dataset())
             self._to_resample = 0  # no resampling to do if both datasets are UFS
 
         elif self._is_dr2_UFS is True:
-            self._freq_unit, self._step = self._get_lead_resolution(self._data_reader2)
+            self._freq_unit, self._step = timeutil.get_lead_resolution(self._data_reader2.dataset())
             self._to_resample = 1
 
         else:
-            self._freq_unit, self._step = self._get_lead_resolution(self._data_reader1)
+            self._freq_unit, self._step = timeutil.get_lead_resolution(self._data_reader1.dataset())
             self._to_resample = 2
 
         if self._freq_unit not in ['MS', 'D', 'H']:
             raise ValueError(f"Model has unsupported frequency unit '{self._freq_unit}'")
 
         # Get the grid shapes as a readable string
-        input_grid_shape = str(getattr(self, f'_grid{self._highres_grid}').sizes)
-        output_grid_shape = str(getattr(self, f'_grid{self._lowres_grid}').sizes)
+        if self._highres_grid != 0:
+            input_grid_shape = str(getattr(self, f'_grid{self._highres_grid}').sizes)
+            output_grid_shape = str(getattr(self, f'_grid{self._lowres_grid}').sizes)
+        else:
+            # Arbitrary
+            input_grid_shape = str(getattr(self, f'_grid1').sizes)
+            output_grid_shape = str(getattr(self, f'_grid2').sizes)
 
         # Remove some characters from stringified .sizes to make it more readable
         for ch in ["\'", "{", "(", ")", "}", "Frozen", ":"]:
@@ -119,14 +134,23 @@ class Regrid:
             output_grid_shape = output_grid_shape.replace(ch, '')
 
         # Instantiate XESMF Regridder
+        # Use this grid for highres/lowres:
+        if self._highres_grid != 0:
+            use_this_highres_grid = getattr(self, f'_grid{self._highres_grid}')
+            use_this_lowres_grid = getattr(self, f'_grid{self._lowres_grid}')
+        else:
+            # Arbitrary
+            use_this_highres_grid = getattr(self, f'_grid1')
+            use_this_lowres_grid = getattr(self, f'_grid2')
+
         self.regridder = xe.Regridder(
-            getattr(self, f'_grid{self._highres_grid}'),
-            getattr(self, f'_grid{self._lowres_grid}'),
+            use_this_highres_grid,
+            use_this_lowres_grid,
             self.method,
             locstream_in=False,  # <-- can get rid of this altogether.
             reuse_weights=False
         )
-        print('Regrid Object initialized.')
+        print('\nRegrid Object initialized.')
 
         # Resample instructions
         print('\n___Resample Instructions___')
@@ -158,7 +182,7 @@ class Regrid:
             print(f'data_reader{self._to_resample} can have its time coordinates converted to init+lead.')
             freq_types = {'MS': 'monthly', 'D': 'daily', 'H': 'hourly'}
             print(f"Lead resolution of the UFS dataset interpreted as {freq_types[self._freq_unit]} intervals.")
-            print(f'Align these data by running <RegridObj>.align()  (Note: May need to resample and/or regrid first.)')
+            print(f'Align these data by running <RegridObj>.align() (You may need to resample and/or regrid first.)\n')
         else:
             print(f'Both datasets are UFS, so the .align() method is disabled.')
 
@@ -212,30 +236,6 @@ class Regrid:
         # Construct model grid
         grid = xr.Dataset({'lat': data_reader.dataset()['lat'], 'lon': data_reader.dataset()['lon']})
         return grid
-
-    def _get_lead_resolution(self, data_reader) -> Tuple[str, np.timedelta64]:
-
-        if 'lead' not in data_reader.dataset().variables:
-            return (None, None)
-
-        lead = data_reader.dataset()['lead'].values.astype(int)
-        lead_unit = data_reader.dataset()['lead'].attrs.get("units", "hours")
-
-        # print(f"\nDEBUG: Analyzing lead time units")
-        # print(f"       Raw lead values: {self.model_ds['lead'].values[:5]}...")
-        # print(f"       Metadata units: '{lead_unit}'")
-
-        if lead_unit == 'months':
-            return 'MS', np.timedelta64(30, 'D')
-
-        elif lead_unit == 'days':
-            return 'D', np.timedelta64(lead[1] - lead[0], 'D')
-
-        elif lead_unit == 'hours':
-            return 'H', np.timedelta64(lead[1] - lead[0], 'h')
-
-        else:
-            raise ValueError(f"Unsupported lead unit '{lead_unit}'")
 
     def _get_inits_and_leads(self, dataset):
         # Get init and lead values, assuming they exist.
@@ -293,19 +293,24 @@ class Regrid:
             print(f'Number of cores available: {n_cores}')
 
             # batches are [(start_time, end_time),...]
-            batches = resample.datetime_batcher(all_times)
+            batches = timeutil.datetime_batcher(all_times)
             resample_args = [(dataset, slice(batch[0], batch[1]), self._freq_unit) for batch in batches]
+
+            # Put this here so that subsequent multiprocesses don't inexplicably hang forever.
+            mp.set_start_method("spawn", force=True)
 
             # -- MULTIPROCESS --
             p = mp.Pool(n_cores)
-            result = p.starmap(resample.resample, resample_args, chunksize=1)
+            result = p.starmap(stats.resample, resample_args, chunksize=1)
+
             p.close()
             p.join()
             # ------------------
+            print("Finished multiprocessing.  Concatenating results.")
             result = xr.concat(result, dim='time', coords='different', compat='equals').sortby('time')
-
+            gc.collect()
         else:
-            result = resample.resample(dataset, slice(all_times[0], all_times[-1]), self._freq_unit)
+            result = stats.resample(dataset, slice(all_times[0], all_times[-1]), self._freq_unit)
 
         end_time = time.time()
         print(f'Resampling completed in {round((end_time-start_time)/60.0, 2)} minutes.')
@@ -659,6 +664,7 @@ class Regrid:
         if self._highres_grid == 0:
 
             # If resampling is also irrelevant, then grab the non-UFS dataset.
+            # (Does this first logic gate mean anything?  Reconsider.)
             if self._to_resample == 0:
                 to_align_datareader = self._data_reader2 if self._is_dr1_UFS is True else self._data_reader1
 
