@@ -246,7 +246,7 @@ class Regrid:
     def resample(self, var, lev=None, time=None, use_mp=True):
 
         '''resample() can be run on datasets with 'time' coordinates'''
-
+        use_mp = False  # For platforms with limited compute.
         if self._to_resample == 0:
             print("resampling disabled")
             return None
