@@ -123,10 +123,8 @@ dependencies:
 - idna=3.10
 - importlib-metadata=8.6.1
 - importlib_resources=6.5.2
-- ipykernel=6.29.5
-# - ipython=8.32.0
-# - ipython_pygments_lexers=1.1.1
-# - ipywidgets=8.1.5
+- ipython_pygments_lexers=1.1.1
+- ipywidgets=8.1.5
 - isoduration=20.11.0
 - jedi=0.19.2
 - jinja2=3.1.5
@@ -313,12 +311,10 @@ dependencies:
 - pysocks=1.7.1
 - pyspharm=1.0.9
 - pytest=8.4.2
-# - python=3.11.11
 - python-dateutil=2.9.0.post0
 - python-fastjsonschema=2.21.1
 - python-json-logger=2.0.7
 - python-tzdata=2025.2
-- python_abi=3.11
 - pytz=2025.1
 - pyu2f=0.1.5
 - pyyaml=6.0.2
@@ -396,5 +392,4 @@ dependencies:
 - zlib=1.3.1
 - zstandard=0.23.0
 - zstd=1.5.7
-name: ufs_model_evaluation_py311
-prefix: /home/thamzey/miniforge/envs/ufs_model_evaluation_py311
+name: base
