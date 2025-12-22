@@ -84,8 +84,8 @@ dependencies:
 - docrep=0.3.2
 - donfig=0.8.1.post1
 - eofs=2.0.0
-- esmf=8.9.0
-- esmpy=8.9.0
+# - esmf=8.9.0
+# - esmpy=8.9.0
 - exceptiongroup=1.2.2
 - executing=2.1.0
 - filelock=3.19.1
@@ -375,7 +375,7 @@ dependencies:
 - wrapt=1.17.3
 - xarray=2025.8.0
 - xclim=0.57.0
-- xesmf=0.8.10
+# - xesmf=0.8.10
 - xhistogram=0.3.2
 - xorg-libxau=1.0.12
 - xorg-libxdmcp=1.1.5
