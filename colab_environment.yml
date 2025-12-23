@@ -309,7 +309,7 @@ dependencies:
 - pyproj=3.7.1
 - pyshp=3.0.0
 - pysocks=1.7.1
-- pyspharm=1.0.9
+# - pyspharm=1.0.9
 - pytest=8.4.2
 - python-dateutil=2.9.0.post0
 - python-fastjsonschema=2.21.1
