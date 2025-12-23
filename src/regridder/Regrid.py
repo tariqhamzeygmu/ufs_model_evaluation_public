@@ -14,7 +14,12 @@ import numpy as np
 import pandas as pd
 import multiprocessing as mp
 from typing import Union, Tuple, Optional, List
-import xesmf as xe
+
+try:
+    import xesmf as xe
+except ImportError:
+    import xESMF as xe
+
 import spharm
 import _spherepack
 
