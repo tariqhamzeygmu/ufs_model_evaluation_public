@@ -385,7 +385,7 @@ dependencies:
 - yamale=5.3.0
 - yaml=0.2.5
 - yarl=1.20.1
-- zarr=3.1.1
+#- zarr=3.1.1
 - zeromq=4.3.5
 - zict=3.0.0
 - zipp=3.21.0
