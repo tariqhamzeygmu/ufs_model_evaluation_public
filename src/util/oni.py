@@ -405,6 +405,7 @@ def prep_oni_datasets(statistics: Union[str, List[str]],
                                           lead=leads,  # Only consider first 4 leads.
                                           initmonths=initmonth,
                                           ens_avg=True)
+
     except:
         # UFS must be regridded onto Verif instead.
         regridder.regrid(var=ufs_vars,
@@ -413,6 +414,7 @@ def prep_oni_datasets(statistics: Union[str, List[str]],
                          ens_avg=True)
 
         # lev has already been selected in regrid. same with ens_avg.
+        print(regridder.regridded.dataset())
         ufs_ds = regridder.regridded.retrieve(var=ufs_vars,
                                               time=time_range,
                                               lead=leads,  # Only consider first 4 leads.
@@ -489,8 +491,8 @@ def prep_oni_datasets(statistics: Union[str, List[str]],
         print("Calculating climatology statistics and anomalies.")
 
         # Compute climatology statistics
-        ufs_stats = stats.calc_climatology(ufs_ds[[ufs_var]], area_mean=False)
-        verif_stats = stats.calc_climatology(verif_ds[[verif_var]], area_mean=False)
+        ufs_stats = stats.calc_climatology_anomaly(ufs_ds[[ufs_var]], area_mean=False)
+        verif_stats = stats.calc_climatology_anomaly(verif_ds[[verif_var]], area_mean=False)
 
         # Calculate UFS Anomaly
         ufs_elnino_ds = stats.calc_anomaly(ds=ufs_elnino_ds, var=ufs_var, stats=ufs_stats)
@@ -512,13 +514,13 @@ def prep_oni_datasets(statistics: Union[str, List[str]],
         # -----------
         print('Calculating RWS component climatology statistics and anomalies.')
         # Climatologies
-        ufs_absvrt_stats = stats.calc_climatology(ufs_ds[['absvrt']], area_mean=False)
-        ufs_uchi_stats = stats.calc_climatology(ufs_ds[['uchi']], area_mean=False)
-        ufs_vchi_stats = stats.calc_climatology(ufs_ds[['vchi']], area_mean=False)
+        ufs_absvrt_stats = stats.calc_climatology_anomaly(ufs_ds[['absvrt']], area_mean=False)
+        ufs_uchi_stats = stats.calc_climatology_anomaly(ufs_ds[['uchi']], area_mean=False)
+        ufs_vchi_stats = stats.calc_climatology_anomaly(ufs_ds[['vchi']], area_mean=False)
 
-        verif_absvrt_stats = stats.calc_climatology(verif_ds[['absvrt']], area_mean=False)
-        verif_uchi_stats = stats.calc_climatology(verif_ds[['uchi']], area_mean=False)
-        verif_vchi_stats = stats.calc_climatology(verif_ds[['vchi']], area_mean=False)
+        verif_absvrt_stats = stats.calc_climatology_anomaly(verif_ds[['absvrt']], area_mean=False)
+        verif_uchi_stats = stats.calc_climatology_anomaly(verif_ds[['uchi']], area_mean=False)
+        verif_vchi_stats = stats.calc_climatology_anomaly(verif_ds[['vchi']], area_mean=False)
 
         # Anomalies
         ufs_absvrt_anomaly = stats.calc_anomaly(ds=ufs_ds, var='absvrt', stats=ufs_absvrt_stats)

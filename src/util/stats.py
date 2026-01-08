@@ -25,7 +25,7 @@ def resample(ds: xr.Dataset, timeslice: Tuple[str, ...], freq):
     return ds.sel(time=timeslice).resample(time=freq).mean().sortby('time').compute()
 
 
-def calc_climatology(ds: xr.Dataset, area_mean=False) -> dict:
+def calc_climatology_anomaly(ds: xr.Dataset, area_mean=False, use_member_climatology=True) -> dict:
 
     '''
     Compute longterm, area-based, monthly climatologies.
@@ -76,10 +76,28 @@ def calc_climatology(ds: xr.Dataset, area_mean=False) -> dict:
         results['climatology_mean'] = ds.groupby('time.month').mean(['time'])[var].compute()
         results['climatology_std'] = ds.groupby('time.month').std(['time'])[var].compute()
 
+    # Calculate Anomaly as a final step.
+    anomaly = calc_anomaly(ds=results['monthly_mean'].to_dataset(),
+                           var=var,
+                           stats=results,
+                           use_member_climatology=use_member_climatology)
+
+    anomaly = anomaly[['anomaly']]  # the anomaly function returns the original data too.  Here, just take anomaly.
+
+    # Assign anomaly results to dictionary
+    results['anomaly'] = anomaly
+
     return results
 
 
-def calc_anomaly(ds: xr.Dataset, var: str, stats: dict) -> xr.Dataset:
+def calc_anomaly(ds: xr.Dataset, var: str, stats: dict, use_member_climatology=True) -> xr.Dataset:
+
+    '''climatology stats have already been computed, now calculate anomaly'''
+
+    if use_member_climatology is False and 'init' in ds.dims:
+        for this_member in ds.member.values:
+            stats['climatology_mean'] = stats['climatology_mean'].where(
+                stats['climatology_mean'].member == this_member, stats['climatology_mean'].sel(member=-1))
 
     ds = ds.assign(anomaly=xr.DataArray(np.nan, dims=ds.dims, coords=ds.coords))
 
@@ -296,7 +314,6 @@ def plot_index_spaghetti(ufs_stats: dict,
                     ufs_stats=ufs_stats,
                     verif_stats=verif_stats,
                     calc_anomaly=calc_anomaly,
-                    use_member_climatology=use_member_climatology,
                     verif_label=verif_label):
 
         # Is this the very first iteration? (need this info for labeling)
@@ -321,11 +338,10 @@ def plot_index_spaghetti(ufs_stats: dict,
         inits = list(ufs_index.init.values)
         leads = list(ufs_index.lead.values)
 
-        # Loop over inits and leads
+        # Gather times, inits, and leads as iterables.
         forecast_times = []
-        forecast_months = []  # Keep track of this so that it's easier to extract climatologies later.
-        forecast_initmonths = []  # ditto
-        forecast_leads = []  # ditto
+        forecast_inits = []
+        forecast_leads = []
 
         for this_init in inits:
             for this_lead in leads:
@@ -334,8 +350,7 @@ def plot_index_spaghetti(ufs_stats: dict,
 
                 # Append to record-keeping lists
                 forecast_times.append(this_forecast_time)
-                forecast_months.append((this_forecast_time.astype('datetime64[M]').astype(int) % 12) + 1)
-                forecast_initmonths.append((this_init.astype('datetime64[M]').astype(int) % 12) + 1)
+                forecast_inits.append(this_init)
                 forecast_leads.append(this_lead)
 
         # Generate separate series for each init
@@ -400,15 +415,17 @@ def plot_index_spaghetti(ufs_stats: dict,
                 this_opacity = 1.0
 
             x_values = forecast_times
-            # Compute index (region was already sliced)
-            y_values = ufs_index.sel(member=this_member).values
 
-            # y_values is a lists of sublists, where each sublist represents the leads for an init
-            # Flatten that list:
-            y_values = [item for sublist in y_values for item in sublist]
+            if calc_anomaly is False:
+                # Compute index (region was already sliced)
+                y_values = ufs_index.sel(member=this_member).values
+
+                # y_values is a lists of sublists, where each sublist represents the leads for an init
+                # Flatten that list:
+                y_values = [item for sublist in y_values for item in sublist]
 
             # Calculate anomaly
-            if calc_anomaly is True:
+            elif calc_anomaly is True:
 
                 # If plotting anomaly, draw a zero line.
                 zero_line_properties = {
@@ -424,28 +441,21 @@ def plot_index_spaghetti(ufs_stats: dict,
                     axs[this_decade_index].axhline(**zero_line_properties)
 
                 # Calculate the anomaly
-                ufs_climatology_ens_mean_values = []
-
+                # ufs_climatology_ens_mean_values = []
+                y_values = []
                 # Loop over initmonths and their leads.
                 for i in range(len(forecast_leads)):
-                    this_month = forecast_initmonths[i]
+                    this_init = forecast_inits[i]
                     this_lead = forecast_leads[i]
 
-                    # Define the climatology
-                    # This member's climatology:
-                    if use_member_climatology is True:
-                        use_this_member_for_climatology = this_member
-                    else:
-                        use_this_member_for_climatology = -1
+                    # Get anomaly value
+                    this_anomaly = ufs_stats['anomaly'].sel(member=this_member,
+                                                            init=this_init,
+                                                            lead=this_lead)
 
-                    this_climatology = ufs_stats['climatology_mean'].sel(member=use_this_member_for_climatology,
-                                                                         month=this_month,
-                                                                         lead=this_lead).values
+                    this_anomaly = this_anomaly['anomaly'].values.item()
                     # Append climiatology value to list
-                    ufs_climatology_ens_mean_values.append(this_climatology.item())
-
-                # Subtract climatology to get anomaly
-                y_values -= np.array(ufs_climatology_ens_mean_values)
+                    y_values.append(this_anomaly)
 
             # Keep track of the minimum and maximum y values for axis standardization
             min_y_value = np.nanmin([np.nanmin(y_values), min_y_value])
@@ -504,16 +514,12 @@ def plot_index_spaghetti(ufs_stats: dict,
 
         # Calculate nino3.4 area average and monthly average
         x_values = verif_index.time.values
-        y_values = verif_index.values
 
-        if calc_anomaly is True:
+        if calc_anomaly is False:
+            y_values = verif_index.values
 
-            all_months = [(this_time.astype('datetime64[M]').astype(int) % 12) + 1 for this_time in x_values]
-
-            verif_clim_values = [verif_stats['climatology_mean'].sel(month=da_month).values for da_month in all_months]
-
-            # Subtract by climatology
-            y_values -= verif_clim_values
+        elif calc_anomaly is True:
+            y_values = [verif_stats['anomaly'].sel(time=this_time)['anomaly'].values.item() for this_time in x_values]
 
         min_y_value = np.nanmin([np.nanmin(y_values), min_y_value])
         max_y_value = np.nanmax([np.nanmax(y_values), max_y_value])
@@ -581,11 +587,6 @@ def plot_index_spaghetti(ufs_stats: dict,
 
     if len(decade_batches) == 1:
 
-        if calc_anomaly is True:
-            axs.set_title(f"{title} anomaly")
-        else:
-            axs.set_title(f"{title}")
-
         axs.legend(
             loc='upper center',
             bbox_to_anchor=(0.5, 1.5),
@@ -600,10 +601,7 @@ def plot_index_spaghetti(ufs_stats: dict,
         axs.set_axisbelow(True)
 
     else:
-        if calc_anomaly is True:
-            axs[0].set_title(f"{title} anomaly")
-        else:
-            axs[0].set_title(f"{title}")
+        axs[0].set_title(f"{title}")
 
         for i in range(len(axs)):
             axs[i].set_ylim(min_y_value, max_y_value)

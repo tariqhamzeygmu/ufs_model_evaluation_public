@@ -23,7 +23,7 @@ from ..datareader import datareader as dr
 from ..util import util, timeutil, stats
 
 
-class Regridder:
+class Regrid_Utility:
 
     def __init__(self,
                  highres_grid,
@@ -32,22 +32,30 @@ class Regridder:
         self.highres_grid = highres_grid
         self.lowres_grid = lowres_grid
 
-        self.spharm_highres = spharm.Spharmt(len(highres_grid.lon.values), len(highres_grid.lat.values), legfunc='stored', gridtype='regular')
-        self.spharm_lowres = spharm.Spharmt(len(lowres_grid.lon.values), len(lowres_grid.lat.values), legfunc='stored', gridtype='regular')
+        n_high_lon = len(highres_grid.lon.values)
+        n_high_lat = len(highres_grid.lat.values)
+        n_low_lon = len(lowres_grid.lon.values)
+        n_low_lat = len(lowres_grid.lat.values)
 
-        self.lats = lowres_grid.lat.values
-        self.lons = lowres_grid.lon.values
+        self.spharm_highres = spharm.Spharmt(n_high_lon, n_high_lat, legfunc='stored', gridtype='regular')
+        self.spharm_lowres = spharm.Spharmt(n_low_lon, n_low_lat, legfunc='stored', gridtype='regular')
+
+        self.new_lats = lowres_grid.lat.values
+        self.new_lons = lowres_grid.lon.values
 
     def regrid(self, ds, var):
         ''' time or init+lead structure may be present'''
 
         if 'time' in ds.dims:
+
             all_times = list(ds.time.values)
             slices = []
             for this_time in all_times:
                 this_ds = ds.sel(time=[this_time], drop=False)
 
                 vals_to_regrid = this_ds[var].sel(time=this_time, drop=True).values
+
+                # Regrid!
                 pyspharm_result = spharm.regrid(self.spharm_highres, self.spharm_lowres, vals_to_regrid)
 
                 this_result = xr.Dataset(
@@ -55,8 +63,8 @@ class Regridder:
                         'var_to_regrid': (("lat", "lon"), pyspharm_result),
                     },
                     coords={
-                        "lat": self.lats,
-                        "lon": self.lons,
+                        "lat": self.new_lats,
+                        "lon": self.new_lons,
                     },
                     attrs={"description": "regrid"}
                 )
@@ -77,28 +85,34 @@ class Regridder:
                     this_ds = ds.sel(init=[this_init], lead=[this_lead], drop=False)
 
                     vals_to_regrid = this_ds[var].sel(init=this_init, lead=this_lead, drop=True).values
-                    pyspharm_result = spharm.regrid(self.spharm_highres, self.spharm_lowres, vals_to_regrid)
 
+                    # Regrid!
+                    pyspharm_result = spharm.regrid(self.spharm_highres, self.spharm_lowres, vals_to_regrid)
                     this_result = xr.Dataset(
                         data_vars={
                             'var_to_regrid': (("lat", "lon"), pyspharm_result),
                         },
                         coords={
-                            "lat": self.lats,
-                            "lon": self.lons,
+                            "lat": self.new_lats,
+                            "lon": self.new_lons,
                         },
                         attrs={"description": "regrid"}
                     )
+
                     this_result = this_result.assign_coords(init=this_init, lead=this_lead)
-                    lead_slices.append(this_ds)
+                    this_result = this_result.rename_vars({"var_to_regrid": f'{var}'})
+
+                    lead_slices.append(this_result)
 
                 lead_stack = xr.concat(lead_slices, dim='lead', coords='different', compat='equals')
+
                 stack.append(lead_stack)
 
             final_result = xr.concat(stack, dim='init', coords='different', compat='equals')
             final_result = final_result.assign_coords(init=('init', inits), lead=('lead', leads))
 
         return final_result
+
 
 class Regrid:
     VALID_METHODS = ['bilinear', 'conservative', 'patch', 'nearest_s2d', 'nearest_d2s']
@@ -228,7 +242,7 @@ class Regrid:
 #             reuse_weights=False
 #         )
 
-        self.regridder = Regridder(
+        self.regridder = Regrid_Utility(
             use_this_highres_grid,
             use_this_lowres_grid)
 
@@ -565,7 +579,7 @@ class Regrid:
         else:
             print(f"Running scalar regrid on {', '.join(list(to_regrid_ds.keys()))}")
             start_time = time.time()
-            #to_regrid_ds = self.regridder(to_regrid_ds)
+            # to_regrid_ds = self.regridder(to_regrid_ds)
             to_regrid_ds = self.regridder.regrid(to_regrid_ds, var)
             end_time = time.time()
             print(f"Completed scalar regrid in {round((end_time-start_time)/60.0, 2)} minutes.")
@@ -623,7 +637,7 @@ class Regrid:
             temp_ds = temp_ds.assign(dummy_variable=(data_dims, dummy_data))
 
             # Run xesmf regridder on dummy data, then drop the dummy data
-            #temp_ds = self.regridder(temp_ds)
+            # temp_ds = self.regridder(temp_ds)
             temp_ds = self.regridder.regrid(temp_ds, dummy_variable)
             temp_ds = temp_ds.drop_vars('dummy_variable')
 
