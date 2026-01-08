@@ -638,7 +638,7 @@ class Regrid:
 
             # Run xesmf regridder on dummy data, then drop the dummy data
             # temp_ds = self.regridder(temp_ds)
-            temp_ds = self.regridder.regrid(temp_ds, dummy_variable)
+            temp_ds = self.regridder.regrid(temp_ds, 'dummy_variable')
             temp_ds = temp_ds.drop_vars('dummy_variable')
 
             # Assign new u-v data to the new grid
