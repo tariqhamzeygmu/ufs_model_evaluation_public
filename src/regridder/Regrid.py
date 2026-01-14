@@ -800,6 +800,7 @@ class Regrid:
         first_time = sorted(to_align_ds.time.values)[0]
         final_time = sorted(to_align_ds.time.values)[-1]
 
+        # UFS dataset
         model_ds = model_data_reader.retrieve(var=varlist, time=(str(first_time), str(final_time)))
 
         # Get inits and leads from UFS dataset

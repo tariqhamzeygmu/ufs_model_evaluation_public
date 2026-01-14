@@ -494,7 +494,9 @@ def plot_index_spaghetti(ufs_stats: dict,
         # Additionally:
         # Get 1 extra month ahead because the data point represents the entire next month.
         # and take off the final time step that would be the first date final month.
-        future_leads = leads + [max(leads) + 1]
+        # future_leads = leads + [max(leads) + 1]
+        future_leads = list(range(12))
+        past_leads = list(range(12))  # Want VERIF series to stretch across entire panel.
 
         # Foreward projection
         verif_forecast_times = [
@@ -505,7 +507,7 @@ def plot_index_spaghetti(ufs_stats: dict,
         # Backward projection
         verif_hindcast_times = [
             timeutil.time_offset(freq_unit, inits[0], lead, step, 'backward')
-            for lead in leads
+            for lead in past_leads
         ]
 
         all_times = sorted(list(set(verif_hindcast_times + verif_forecast_times)))

@@ -414,7 +414,6 @@ def prep_oni_datasets(statistics: Union[str, List[str]],
                          ens_avg=True)
 
         # lev has already been selected in regrid. same with ens_avg.
-        print(regridder.regridded.dataset())
         ufs_ds = regridder.regridded.retrieve(var=ufs_vars,
                                               time=time_range,
                                               lead=leads,  # Only consider first 4 leads.
@@ -428,7 +427,6 @@ def prep_oni_datasets(statistics: Union[str, List[str]],
                                               time=time_range,
                                               lead=leads,
                                               initmonths=initmonth)
-
     if ufs_scaling_factor is not None:
         print('Scaling UFS data')
         ufs_ds = ufs_ds * ufs_scaling_factor
