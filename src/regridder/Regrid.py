@@ -638,14 +638,21 @@ class Regrid:
 
             # Run xesmf regridder on dummy data, then drop the dummy data
             # temp_ds = self.regridder(temp_ds)
-            temp_ds = self.regridder.regrid(temp_ds, 'dummy_variable')
-            temp_ds = temp_ds.drop_vars('dummy_variable')
+            if iterator_name == 'init':
+                temp_ds = temp_ds.expand_dims('init').assign_coords({'init': [this_it_value]})
+                temp_ds = self.regridder.regrid(temp_ds, 'dummy_variable')
+                temp_ds = temp_ds.drop_vars('dummy_variable')
+                temp_ds = temp_ds.squeeze('init', drop=True)
+            else:
+                temp_ds = self.regridder.regrid(temp_ds, 'dummy_variable')
+                temp_ds = temp_ds.drop_vars('dummy_variable')
 
             # Assign new u-v data to the new grid
             if iterator_name == 'init':
                 temp_ds = temp_ds.assign(u_wind=(('lead', 'lat', 'lon'), u_output))
                 temp_ds = temp_ds.assign(v_wind=(('lead', 'lat', 'lon'), v_output))
                 temp_ds = temp_ds.expand_dims('init')
+                temp_ds = temp_ds.assign_coords({'init': [this_it_value]})
             # Otherwise, we know we're working with 'time'.
             else:
                 temp_ds = temp_ds.assign(u_wind=(('time', 'lat', 'lon'), u_output))
