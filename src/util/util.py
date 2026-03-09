@@ -65,8 +65,6 @@ def retrieve_ufs_dataset(ufs_data_reader,
                 **kwargs
             )
 
-            this_ds = this_ds.expand_dims('member')
-            this_ds = this_ds.assign_coords({'member': [this_member]})
             datasets.append(this_ds)
 
     # End Loop
@@ -80,7 +78,7 @@ def retrieve_ufs_dataset(ufs_data_reader,
     return ds
 
 
-def combine_ufs_means(ufs_models_list,
+def combine_ufs_means(ufs_experiments_list,
                       ufs_vars_list,
                       time_range,
                       region=None,
@@ -90,9 +88,14 @@ def combine_ufs_means(ufs_models_list,
     In the merged dataset, each model will have a 'member' coordinate
     '''
     data_reader_list = []
-    for this_model in ufs_models_list:
-        this_filename = f"experiments/phase_1/{this_model}/atm_monthly.zarr"
-        this_data_reader = dr.getDataReader(datasource='UFS', filename=this_filename, model='atm')
+    for this_experiment in ufs_experiments_list:
+        # this_filename = f"experiments/phase_1/{this_experiment}/atm_monthly.zarr"
+
+        this_data_reader = dr.getDataReader(datasource='UFS',
+                                            experiment=this_experiment,
+                                            # filename=this_filename,
+                                            model='atm')
+
         data_reader_list.append(this_data_reader)
 
     members = ['ens_avg']
@@ -101,7 +104,7 @@ def combine_ufs_means(ufs_models_list,
     for i in range(len(data_reader_list)):
 
         this_dr = data_reader_list[i]
-        this_member = ufs_models_list[i]
+        this_member = ufs_experiments_list[i]
         ufs_var = None
 
         for this_var in ufs_vars_list:

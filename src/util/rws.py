@@ -104,6 +104,11 @@ def calc_rws_components(ds: xr.Dataset, uvar: str, vvar: str) -> xr.Dataset:
     '''
     Calculate Rossby Wave Source components at time t.
     '''
+    # If lev is a dimension in the data, then drop it temporarily, work on the underlying arrays, and add it back.
+    stored_lev = None
+    if 'lev' in ds.dims:
+        stored_lev = ds.lev.values[0]  # upstream logic has already confirmed that these data are flat.
+        ds = ds.squeeze(dim='lev')
 
     original_ds = ds.copy(deep=True)
 
@@ -160,6 +165,10 @@ def calc_rws_components(ds: xr.Dataset, uvar: str, vvar: str) -> xr.Dataset:
     # Merge results into original dataset
     final_result = xr.merge([final_result, original_ds], compat='no_conflicts')
 
+    # Add back lev, if it existed.
+    if stored_lev is not None:
+        final_result = final_result.expand_dims(lev=[stored_lev])
+
     return final_result
 
 
@@ -173,6 +182,28 @@ def calc_rws(ds: xr.Dataset,
     '''
     Calculate Rossby Wave Source at time t.
     '''
+
+    # If lev is a dimension in the data, then drop it temporarily, work on the underlying arrays, and add it back.
+    stored_lev = None
+    if 'lev' in ds.dims:
+        stored_lev = ds.lev.values[0]  # upstream logic has already confirmed that these data are flat.
+        ds = ds.squeeze(dim='lev')
+
+        # Additionally, squeeze the statistical data.
+        absvrt_anomaly = absvrt_anomaly.squeeze(dim='lev')
+        uchi_anomaly = uchi_anomaly.squeeze(dim='lev')
+        vchi_anomaly = vchi_anomaly.squeeze(dim='lev')
+
+        for key in absvrt_stats.keys():
+            if absvrt_stats[key] is not None and 'lev' in absvrt_stats[key].dims:
+                absvrt_stats[key] = absvrt_stats[key].squeeze(dim='lev')
+
+            if uchi_stats[key] is not None and 'lev' in uchi_stats[key].dims:
+                uchi_stats[key] = uchi_stats[key].squeeze(dim='lev')
+
+            if vchi_stats[key] is not None and 'lev' in vchi_stats[key].dims:
+                vchi_stats[key] = vchi_stats[key].squeeze(dim='lev')
+
     original_ds = ds.copy(deep=True)
 
     if 'time' in ds.dims:
@@ -328,5 +359,9 @@ def calc_rws(ds: xr.Dataset,
 
     # Merge results into original dataset
     final_result = xr.merge([final_result, original_ds], compat='no_conflicts')
+
+    # Add back lev, if it existed.
+    if stored_lev is not None:
+        final_result = final_result.expand_dims(lev=[stored_lev])
 
     return final_result

@@ -41,8 +41,18 @@ class DataReader(ABC):
         # This attribute is managed within self.retrieve using getters and setters
         self._set_retrieve_params(**{})
 
-        # relabel dimensions and order coordinate axes
+        # relabel, reorder dimensions and order coordinate axes
         self._dataset = DataReader.standardize_coords(self._dataset)
+
+        # Get readable datareader type (turn something like "src.datareader.UFS_DataReader.UFS_DataReader" into "UFS")
+        datasource = str(type(self)).split('.')[-1].split('_')[0]
+
+        # Check for a experiment tag (e.g. UFS-beta.0.1)
+        if hasattr(self, 'experiment'):
+            datasource += f'-{self.experiment}'
+
+        # Assign readable datasource to self.
+        self.datasource = datasource
 
         # print(f'Dataset ready.')
 
@@ -132,6 +142,19 @@ class DataReader(ABC):
                 dims[lead_ind] = 'init'
                 dims[init_ind] = 'lead'
 
+        if 'init' in dims and 'lead' in dims and 'lat' in dims:
+            init_ind = dims.index('init')
+            lat_ind = dims.index('lat')
+
+            if lat_ind < init_ind:
+                change_order = True
+                init_to_move = dims.pop(init_ind)
+                lead_ind = dims.index('lead')
+                lead_to_move = dims.pop(lead_ind)
+
+                dims.insert(0, lead_to_move)
+                dims.insert(0, init_to_move)
+
         # Transpose the data.
         # Note that a chunking scheme must be present for large datasets.
         if change_order is True:
@@ -213,25 +236,44 @@ class DataReader(ABC):
 
         '''
         This is a rather naive way to determine if geospatial data are flat.
-        Effective usage depends on resetting/dropping coords if e.g. 1 level is retrieved.
+        Effective usage depends on resetting/dropping coords, e.g. when 1 level is retrieved.
         If an external Xarray dataset is supplied, then bypass this data_reader's dataset.
         '''
         if dataset is None:
-            all_coords = set(list(self._dataset.coords))
-        else:
-            all_coords = set(list(dataset.coords))
+            dataset = self._dataset
+
+        # All dimensions in dataset
+        all_dims = set(list(dataset.dims))
 
         # Assume these are the possible vertical coordinates we could encounter.
         # May need to update this if new coordinates are encountered.
-        vertical_coords = {'lev', 'hybrid', 'depth', 'depthBelowLandLayer'}
+        vertical_dims = {'lev', 'hybrid', 'depth', 'depthBelowLandLayer'}
+        vertical_dims_found = []
 
-        # If there are zero vertical_coords in this dataset, then flat.
-        if vertical_coords.isdisjoint(all_coords) is True:
-            return True, list(vertical_coords)
+        # null
+        is_this_flat = True
 
-        # Else there is/are vertical coordinates, return them.
-        else:
-            return False, list(vertical_coords.intersection(all_coords))
+        # Logic
+        for this_dim in vertical_dims:
+            if this_dim in dataset.dims:
+                if len(dataset[this_dim].values) > 1:
+
+                    is_this_flat = False
+                    vertical_dims_found.append(this_dim)
+
+        return is_this_flat, vertical_dims_found
+
+        # # If there are zero vertical_coords in this dataset, then flat.
+        # if vertical_coords.isdisjoint(all_coords) is True:
+        #     return True, list(vertical_coords)
+
+        # # Else there is/are vertical coordinates, return them.
+        # else:
+        #     return False, list(vertical_coords.intersection(all_coords))
+
+    def update(self, ds: xr.Dataset):
+        self._dataset = DataReader.standardize_coords(ds)
+        print('Dataset updated.')
 
     #######################################################################################################
     def _set_retrieve_params(self, **kwargs):
@@ -288,7 +330,7 @@ class DataReader(ABC):
 
         mean: Union[str, List[str]] = None,   # NEW
         std: Union[str, List[str]] = None,    # NEW
-        save_path: str = None
+        save_path: str = None,
         ) -> xr.Dataset:
         '''
 
@@ -319,9 +361,13 @@ class DataReader(ABC):
             # print('Slicing by lat')
             if isinstance(lat, (tuple, list)):
                 lat_slice = sorted(lat, reverse=True)
-                data = data.sel(lat=slice(*lat_slice))
+
+                if len(lat_slice) == 1:
+                    data = data.sel(lead=[lat_slice[0]], method='nearest')
+                else:
+                    data = data.sel(lat=slice(*lat_slice))
             else:
-                data = data.sel(lat=lat, method='nearest')
+                data = data.sel(lat=[lat], method='nearest')
 
         # Longitude selection
         lon = params['lon']
@@ -329,10 +375,14 @@ class DataReader(ABC):
             # print('Slicing by lon')
             if isinstance(lon, (tuple, list)):
                 lon = [l % 360 for l in lon]
-                data = data.sel(lon=slice(*sorted(lon)))
+
+                if len(lon) == 1:
+                    data = data.sel(lead=[lon[0]], method='nearest')
+                else:
+                    data = data.sel(lon=slice(*sorted(lon)))
             else:
                 adj_lon = lon % 360 if isinstance(lon, (int, float)) else lon
-                data = data.sel(lon=adj_lon, method='nearest')
+                data = data.sel(lon=[adj_lon], method='nearest')
 
         # Time selection
         time = params['time']
@@ -342,23 +392,30 @@ class DataReader(ABC):
             if 'init' in data.dims:
                 # print('Slicing by init')
                 if isinstance(time, (tuple, list)):
-                    start = DataReader.to_datetime(time[0])
-                    end = DataReader.to_datetime(time[1])
-                    data = data.sel(init=slice(start, end))
+
+                    if len(time) == 1:
+                        data = data.sel(init=[DataReader.to_datetime(time[0])], method='nearest')
+                    else:
+                        start = DataReader.to_datetime(time[0])
+                        end = DataReader.to_datetime(time[1])
+                        data = data.sel(init=slice(start, end))
                 else:
                     time_val = DataReader.to_datetime(time)
-                    data = data.sel(init=time_val, method='nearest')
+                    data = data.sel(init=[time_val], method='nearest')
 
             if 'time' in data.dims:
                 # print('Slicing by time')
                 if isinstance(time, (tuple, list)):
-                    start = DataReader.to_datetime(time[0])
-                    end = DataReader.to_datetime(time[1])
-                    data = data.sel(time=slice(start, end))
-                    # sel_dict['time'] = slice(start, end)
+
+                    if len(time) == 1:
+                        data = data.sel(time=[DataReader.to_datetime(time[0])], method='nearest')
+                    else:
+                        start = DataReader.to_datetime(time[0])
+                        end = DataReader.to_datetime(time[1])
+                        data = data.sel(time=slice(start, end))
                 else:
                     time_val = DataReader.to_datetime(time)
-                    data = data.sel(time=time_val, method='nearest')
+                    data = data.sel(time=[time_val], method='nearest')
 
         # Subset by init month number (int or tuple or list)
         initmonths = params['initmonths']
@@ -393,9 +450,14 @@ class DataReader(ABC):
         if "level_dim" in model_dims and lev is not None and model_dims["level_dim"] in data.dims:
             # print(f"Slicing by model dimension {model_dims['level_dim']}")
             if isinstance(lev, (tuple, list)):
-                data = data.sel({model_dims["level_dim"]: slice(*lev)})
+
+                if len(lev) == 1:
+                    data = data.sel({model_dims["level_dim"]: [lev[0]]})
+                else:
+                    data = data.sel({model_dims["level_dim"]: slice(*lev)})
+
             else:
-                data = data.sel({model_dims["level_dim"]: lev})  # Do not use method=nearest
+                data = data.sel({model_dims["level_dim"]: [lev]})  # Do not use method=nearest
 
         # For other Vertical levels
         elif lev is not None:
@@ -415,38 +477,51 @@ class DataReader(ABC):
             # print(f'Slicing by {vertical_dim}')
 
             if isinstance(lev, (tuple, list)):
-                data = data.sel(**{vertical_dim: slice(*lev)})
-            else:
-                data = data.sel(**{vertical_dim: lev})  # Do not use method=nearest
-                # sel_dict['lev'] = lev
 
-        # data = data.sel(**sel_dict)  # <-- Revisit this.  We may have better performance with 1 sel operation.
+                if len(lev) == 1:
+                    data = data.sel(**{vertical_dim: [lev[0]]})
+                    print('here')
+                else:
+                    data = data.sel(**{vertical_dim: slice(*lev)})
+            else:
+                data = data.sel(**{vertical_dim: [lev]})  # Do not use method=nearest
 
         # Depth
         depth = params['depth']
         if "depth_dim" in model_dims and depth is not None and model_dims["depth_dim"] in data.dims:
             # print('Slicing by depth_dim')
             if isinstance(depth, (tuple, list)):
-                data = data.sel({model_dims["depth_dim"]: slice(*depth)})
+
+                if len(depth) == 1:
+                    data = data.sel({model_dims["depth_dim"]: [depth[0]]})
+                else:
+                    data = data.sel({model_dims["depth_dim"]: slice(*depth)})
             else:
-                data = data.sel({model_dims["depth_dim"]: depth})  # Do not use method=nearest
+                data = data.sel({model_dims["depth_dim"]: [depth]})  # Do not use method=nearest
 
         # Ensemble member and lead time
         member = params['member']
         if member is not None and 'member' in data.dims:
             # print('Getting member')
             if isinstance(member, (tuple, list)):
-                data = data.sel(member=slice(*member))
+
+                if len(member) == 1:
+                    data = data.sel(member=[member[0]])
+                else:
+                    data = data.sel(member=slice(*member))
             else:
-                data = data.sel(member=member)  # Do not use method=nearest
+                data = data.sel(member=[member])  # Do not use method=nearest
 
         lead = params['lead']
         if lead is not None and 'lead' in data.dims:
             # print('Slicing by lead')
             if isinstance(lead, (tuple, list)):
-                data = data.sel(lead=slice(*lead))
+                if len(lead) == 1:
+                    data = data.sel(lead=[lead[0]])
+                else:
+                    data = data.sel(lead=slice(*lead))
             else:
-                data = data.sel(lead=lead)  # Do not use method=nearest
+                data = data.sel(lead=[lead])  # Do not use method=nearest
 
         # Ensemble average
         ens_avg = params['ens_avg']
@@ -487,10 +562,6 @@ class DataReader(ABC):
                 print(f"Data saved as CSV: {save_path}")
             else:
                 raise ValueError("Unsupported format. Use .nc or .csv")
-
-        # Reset coordinates. E.g. if one lev was selected, remove the coordinate.
-        # Downstream logic depends on this action.
-        data = data.reset_coords(drop=True)
 
         # Always return dataSET, even for 1 variable
         return data

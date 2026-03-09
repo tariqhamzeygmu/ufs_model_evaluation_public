@@ -20,102 +20,12 @@ import _spherepack
 
 from ..datareader import DataReader_Super, UFS_DataReader
 from ..datareader import datareader as dr
-from ..util import util, timeutil, stats
-
-
-class Regrid_Utility:
-
-    def __init__(self,
-                 highres_grid,
-                 lowres_grid):
-
-        self.highres_grid = highres_grid
-        self.lowres_grid = lowres_grid
-
-        n_high_lon = len(highres_grid.lon.values)
-        n_high_lat = len(highres_grid.lat.values)
-        n_low_lon = len(lowres_grid.lon.values)
-        n_low_lat = len(lowres_grid.lat.values)
-
-        self.spharm_highres = spharm.Spharmt(n_high_lon, n_high_lat, legfunc='stored', gridtype='regular')
-        self.spharm_lowres = spharm.Spharmt(n_low_lon, n_low_lat, legfunc='stored', gridtype='regular')
-
-        self.new_lats = lowres_grid.lat.values
-        self.new_lons = lowres_grid.lon.values
-
-    def regrid(self, ds, var):
-        ''' time or init+lead structure may be present'''
-
-        if 'time' in ds.dims:
-
-            all_times = list(ds.time.values)
-            slices = []
-            for this_time in all_times:
-                this_ds = ds.sel(time=[this_time], drop=False)
-
-                vals_to_regrid = this_ds[var].sel(time=this_time, drop=True).values
-
-                # Regrid!
-                pyspharm_result = spharm.regrid(self.spharm_highres, self.spharm_lowres, vals_to_regrid)
-
-                this_result = xr.Dataset(
-                    data_vars={
-                        'var_to_regrid': (("lat", "lon"), pyspharm_result),
-                    },
-                    coords={
-                        "lat": self.new_lats,
-                        "lon": self.new_lons,
-                    },
-                    attrs={"description": "regrid"}
-                )
-                this_result = this_result.assign_coords(time=this_time)
-                this_result = this_result.rename_vars({"var_to_regrid": f'{var}'})
-                slices.append(this_result)
-            final_result = xr.concat(slices, dim='time', coords='minimal', compat='equals').sortby('time')
-
-        elif 'init' in ds.dims:
-
-            inits = np.atleast_1d(ds['init'].values)
-            leads = np.atleast_1d(ds['lead'].values.astype(int))
-            stack = []
-
-            for this_init in inits:
-                lead_slices = []
-                for this_lead in leads:
-                    this_ds = ds.sel(init=[this_init], lead=[this_lead], drop=False)
-
-                    vals_to_regrid = this_ds[var].sel(init=this_init, lead=this_lead, drop=True).values
-
-                    # Regrid!
-                    pyspharm_result = spharm.regrid(self.spharm_highres, self.spharm_lowres, vals_to_regrid)
-                    this_result = xr.Dataset(
-                        data_vars={
-                            'var_to_regrid': (("lat", "lon"), pyspharm_result),
-                        },
-                        coords={
-                            "lat": self.new_lats,
-                            "lon": self.new_lons,
-                        },
-                        attrs={"description": "regrid"}
-                    )
-
-                    this_result = this_result.assign_coords(init=this_init, lead=this_lead)
-                    this_result = this_result.rename_vars({"var_to_regrid": f'{var}'})
-
-                    lead_slices.append(this_result)
-
-                lead_stack = xr.concat(lead_slices, dim='lead', coords='different', compat='equals')
-
-                stack.append(lead_stack)
-
-            final_result = xr.concat(stack, dim='init', coords='different', compat='equals')
-            final_result = final_result.assign_coords(init=('init', inits), lead=('lead', leads))
-
-        return final_result
+from ..util import util, timeutil, regridutil, stats
 
 
 class Regrid:
-    VALID_METHODS = ['bilinear', 'conservative', 'patch', 'nearest_s2d', 'nearest_d2s']
+    # VALID_METHODS = ['bilinear', 'conservative', 'patch', 'nearest_s2d', 'nearest_d2s']  # xesmf
+    VALID_METHODS = ['linear', 'nearest', 'slinear', 'cubic', 'quintic', 'pchip']  # scipy
 
     '''
     Regrid two DataReader objects.  Assume equally spaced rectilinear grids.
@@ -124,7 +34,7 @@ class Regrid:
     def __init__(self,
                  data_reader1,
                  data_reader2,
-                 method: str = 'bilinear'):
+                 method: str = 'linear'):
 
         '''
         Attributes:
@@ -139,6 +49,8 @@ class Regrid:
         self.aligned = None  # set by self.align()
         self._regrid_vars = []
         self._resample_vars = []
+        self.highres_grid = None  # integer 0, 1, or 2 will be assigned.
+        self.to_resample = None  # integer 0, 1, or 2 will be assigned.
 
         # Check data_reader input
         if not isinstance(data_reader1, DataReader_Super.DataReader):
@@ -181,6 +93,9 @@ class Regrid:
         # What if both resolutions are the same? (0)
         self._lowres_grid = 1 if self._highres_grid == 2 else 2
 
+        #  Make this value public
+        self.highres_grid = self._highres_grid
+
         # Get readable data types of the data_readers to print to console, e.g. UFS_DataReader to ERA5_DataReader.
         if self._highres_grid != 0:
             type_highres = str(type(getattr(self, f'_data_reader{self._highres_grid}')))
@@ -198,14 +113,17 @@ class Regrid:
         if self._is_dr1_UFS is True and self._is_dr2_UFS is True:
             self._freq_unit, self._step = timeutil.get_lead_resolution(self._data_reader1.dataset())
             self._to_resample = 0  # no resampling to do if both datasets are UFS
+            self.to_resample = 0  # Also set a public attribute for this.
 
         elif self._is_dr2_UFS is True:
             self._freq_unit, self._step = timeutil.get_lead_resolution(self._data_reader2.dataset())
             self._to_resample = 1
+            self.to_resample = 1
 
         else:
             self._freq_unit, self._step = timeutil.get_lead_resolution(self._data_reader1.dataset())
             self._to_resample = 2
+            self.to_resample = 2
 
         if self._freq_unit not in ['MS', 'D', 'H']:
             raise ValueError(f"Model has unsupported frequency unit '{self._freq_unit}'")
@@ -242,9 +160,10 @@ class Regrid:
 #             reuse_weights=False
 #         )
 
-        self.regridder = Regrid_Utility(
+        self.regridder = regridutil.ScalarRegridUtility(
             use_this_highres_grid,
-            use_this_lowres_grid)
+            use_this_lowres_grid,
+            method=self.method)
 
         print('\nRegrid Object initialized.')
 
@@ -367,6 +286,7 @@ class Regrid:
         self.resampled = dr.getDataReader(datasource='supplied',
                                           dataset=self._resample(ds_for_resample, use_mp=use_mp),  # computation
                                           WINDS=WINDS)
+
         print(f"Resample results stored in <RegridObj>.resampled")
         return None
 
@@ -424,12 +344,13 @@ class Regrid:
         # If resampling is needed but resample has not been calculated...
         if self._to_resample != 0 and self.resampled is None:
             msg = f'Resample your verification data first, by running'
-            msg = f' <RegridObj>.resample(var=<var>, lev=<lev>, time=time_range)'
+            msg += f' <RegridObj>.resample(var=<var>, lev=<lev>, time=time_range)'
             raise ValueError(msg)
 
         # If the resampled data is also the data that shall be regridded...
         if self._highres_grid == self._to_resample:
             data_reader_to_regrid = self.resampled
+
         # Else get the highest resolution dataset
         else:
             data_reader_to_regrid = getattr(self, f'_data_reader{self._highres_grid}')
@@ -470,7 +391,7 @@ class Regrid:
                 # Check that domain is global
                 if kwargs.get('lat', None) is not None or kwargs.get('lon', None) is not None:
                     msg = f'Spherical harmonics can only be run on the full global domain.'
-                    msg += f'\nIf you want to regrid wind vector data, do not slice by lat-lon.'
+                    msg += f'\nIf you want to regrid wind vector data, do not slice by lat-lon yet.'
                     raise ValueError(msg)
 
                 run_sphere = True  # Green light to run spherical harmonics.  var can be a list.
@@ -508,29 +429,8 @@ class Regrid:
         varlist = list(model_data_reader.dataset().keys())
         model_ds = model_data_reader.retrieve(var=varlist, time=kwargs.get('time', None))
 
-        # Get init and lead values for later.
-        model_inits, model_leads = self._get_inits_and_leads(model_ds)
-
-        # model_ds has leads that may extend beyond the specified time slice.
-        # In that case, we must extend the time range to capture all the needed verif data.
-        # Get the first and final inits
-        first_init = sorted(model_ds.init.values)[0]
-        final_init = sorted(model_ds.init.values)[-1]
-
-        # Get the final lead of the final init.
-        # Add 1 because we want to grab all verif data for the final lead.
-        # e.g. Montly data with init 2020-01-01 and +3 lead times.
-        # The final lead time would thus be 2020-04-01.
-        # To grab all verif data, then we need the entire month of 04.
-        # Extend the final lead time to 2020-05-01 and consider it an exclusive bound.
-        # (TODO: What if we're dealing with 2 ufs dataset?)
-        final_lead = max(model_ds.sel(init=final_init).lead.values) + 1
-
-        # Don't get verif data at or beyond this datetime
-        final_time = timeutil.time_offset(self._freq_unit, final_init, final_lead, self._step)
-
-        # Update time input
-        kwargs['time'] = (str(first_init), str(final_time))
+        if 'time' in kwargs:
+            kwargs.pop('time')  # Don't need time anymore, handled by match_time_to_leads
 
         # Get dataset to spatially regrid (Note: It could be UFS or verif/obs depending on resolution)
         # If already resampled, lev would have been dropped after resetting coords. (resampling requires flatness)
@@ -556,14 +456,8 @@ class Regrid:
         if is_flat is not True:
             raise KeyError(f'You must specify a single vertical level to regrid.')
 
-        # After adding +1 to final_lead, final_time shall be exclusive, not inclusive
-        if 'time' in to_regrid_ds.coords:
-            all_times = list(to_regrid_ds.time.values)
-            matches = list(all_times >= final_time)
-            final_index = matches.index(True) if True in matches else None
-
-            # Do the exlusive time slice
-            to_regrid_ds = to_regrid_ds.isel(time=slice(0, final_index))
+        to_regrid_ds = timeutil.match_time_to_leads(verif_ds=to_regrid_ds,
+                                                    ufs_ds=model_ds)
 
         # REGRID SPHERE ##
         if run_sphere is True:
@@ -588,11 +482,12 @@ class Regrid:
         self.regridded = dr.getDataReader(datasource='supplied',
                                           dataset=to_regrid_ds,
                                           WINDS=WINDS)
+
         print(f"Regrid results stored in <RegridObj>.regridded")
 
     def _run_sphere(self, dataset, U_WIND_VAR, V_WIND_VAR):
 
-        # Our spherepack-based code expects 1 time dimension.
+        # Our spherepack-based code expects 1 time dimension and no vertical levels of any kind.
         # Therefore, if dealing with init+leads, make a slice at each init,
         # and treat the leads as if they were times.  Merge results at the end.
         if 'init' in dataset.dims:
@@ -602,6 +497,12 @@ class Regrid:
         else:
             iterator_name = None
             iterator_values = [None]
+
+        # If lev is a dimension in the data, then drop it temporarily, work on the underlying arrays, and add it back.
+        stored_lev = None
+        if 'lev' in dataset.dims:
+            stored_lev = dataset.lev.values[0]  # upstream logic has already confirmed that these data are flat.
+            dataset = dataset.squeeze(dim='lev')
 
         # Each time slice will be appended here, to be merged at the end.
         results = []
@@ -666,6 +567,11 @@ class Regrid:
 
         # Merge results into 1 dataset.
         results = xr.merge(results, join='outer', compat='no_conflicts')
+
+        # Add back lev, if it existed.
+        if stored_lev is not None:
+            results = results.expand_dims(lev=[stored_lev])
+
         print(f"Completed sperical harmonics in {round((end_time-start_time)/60.0, 2)} minutes.")
 
         return results

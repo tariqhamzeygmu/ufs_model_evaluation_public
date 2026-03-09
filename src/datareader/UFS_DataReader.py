@@ -30,9 +30,10 @@ class UFS_DataReader(DataReader):
         if model not in allowed_models:
             raise ValueError(f'Must supply model= one of {", ".join(allowed_models)}')
 
-        self.model = model  # <-- unique to UFS
+        self.experiment = kwargs.get('experiment', 'baseline')  # <-- unique to UFS
+        self.model = model  # <-- unique to UFS, atm or ocn
         self._base_url = 's3://noaa-oar-sfsdev-pds/'
-        self._default_file = 'experiments/phase_1/baseline/atm_monthly.zarr'
+        self._default_file = f'experiments/phase_1/{self.experiment}/atm_monthly.zarr'
 
         super().__init__(file_url=file_url)
 

@@ -276,18 +276,13 @@ class ONI:
             return getattr(self, att)
 
 
-def prep_oni_datasets(statistics: Union[str, List[str]],
-                      ufs_model: str,
-                      ufs_var: str,
-                      verif_var: str,
-                      time_range: Tuple[str],
-                      initmonth: int,
-                      leads: tuple,
+def prep_oni_datasets(data_reader1,
+                      var1: Union[str, List[str]],
+                      data_reader2,
+                      var2: Union[str, List[str]],
+                      statistics: Union[str, List[str]],
                       elnino_years: list,
-                      lanina_years: list,
-                      lev: Optional[float] = None,
-                      ufs_scaling_factor: Optional[float] = None,
-                      verif_scaling_factor: Optional[float] = None) -> Tuple[xr.Dataset]:
+                      lanina_years: list):
 
     '''Prepare datasets used for enso-teleconnections diagnostics.'''
 
@@ -297,7 +292,21 @@ def prep_oni_datasets(statistics: Union[str, List[str]],
                             'stationary wave number',
                             'rossby wave source']
 
-    # Check data type
+    # Check data types:
+    # Input variables.
+    if isinstance(var1, str):
+        var1 = [var1]
+    elif not isinstance(var1, list):
+        msg = "var1 must be a string (1 variable) or list of strings (2 variables)."
+        raise ValueError(msg)
+
+    if isinstance(var2, str):
+        var2 = [var2]
+    elif not isinstance(var2, list):
+        msg = "var2 must be a string (1 variable) or list of strings (2 variables)."
+        raise ValueError(msg)
+
+    # Statistics requested.
     if isinstance(statistics, str):
         statistics = [statistics]
 
@@ -317,150 +326,47 @@ def prep_oni_datasets(statistics: Union[str, List[str]],
         msg = f"{not_available} is not available. statistics must be one or more of {available_statistics}'"
         raise ValueError(msg)
 
-    # Process 'leads'.  DataReader expects to see (min_value, max_value) when slicing.
-    min_lead = min(leads)
-    max_lead = max(leads)
-    leads = (min_lead, max_lead)
+    # Get types of datareaders (turn something like "src.datareader.UFS_DataReader.UFS_DataReader" into "UFS")
+    type1 = str(type(data_reader1)).split('.')[-1].split('_')[0]
+    type2 = str(type(data_reader2)).split('.')[-1].split('_')[0]
 
-    # --- BEGIN WORK ---
+    # Check if a type is UFS. If so, get its releast tag and append to 'type'
+    if type1 == 'UFS' and hasattr(data_reader1, 'experiment'):
+        type1 += str(data_reader1.experiment)
 
-    # Get UFS data reader
-    ufs_data_reader = dr.getDataReader(datasource='UFS',
-                                       filename=f'experiments/phase_1/{ufs_model}/atm_monthly.zarr',
-                                       model='atm')
+    if type2 == 'UFS' and hasattr(data_reader2, 'experiment'):
+        type2 += str(data_reader2.experiment)
 
-    # Get VERIF data reader (This is hardcoded to ERA5, for now...
-    verif_data_reader = dr.getDataReader(datasource='ERA5')
-
-    # Initialize Regridder
-    regridder = Regrid.Regrid(data_reader1=ufs_data_reader,
-                              data_reader2=verif_data_reader,
-                              method='bilinear')
-
-    # The user may be requesting a WIND field, in which case we need the orthogonal field as well.
-    # Do this for VERIF
-    other_wind_field = None
-    for wind_set in verif_data_reader.WINDS:
-        # Assume each set has 2 wind fields, but don't assume how the keys are named.
-        var_keys = list(wind_set.keys())
-        if verif_var in wind_set.values():
-
-            if wind_set[var_keys[0]] == verif_var:
-                other_wind_field = wind_set[var_keys[1]]
-
-            elif wind_set[var_keys[1]] == verif_var:
-                other_wind_field = wind_set[var_keys[0]]
-
-    # Insert verif_var and other_wind_field into a list.
-    # If other_wind_field is still None, just filter it out.
-    verif_vars = [verif_var, other_wind_field]
-    verif_vars = list(filter(None, verif_vars))
-
-    # Do this for UFS
-    other_wind_field = None
-    for wind_set in ufs_data_reader.WINDS:
-        # Assume each set has 2 wind fields, but don't assume how the keys are named.
-        var_keys = list(wind_set.keys())
-        if ufs_var in wind_set.values():
-
-            if wind_set[var_keys[0]] == ufs_var:
-                other_wind_field = wind_set[var_keys[1]]
-
-            elif wind_set[var_keys[1]] == ufs_var:
-                other_wind_field = wind_set[var_keys[0]]
-
-    # Insert verif_var and other_wind_field into a list.
-    # If other_wind_field is still None, just filter it out.
-    ufs_vars = [ufs_var, other_wind_field]
-    ufs_vars = list(filter(None, ufs_vars))
-
-    # Temporally resample VERIF data to monthly resolution to match UFS
-    regridder.resample(var=verif_vars,
-                       lev=lev,
-                       time=time_range,
-                       use_mp=True)
-
-    # Spatially regrid higher-resolution dataset down to lower-resolution dataset.
-
-    # This is a very crude way of determining which dataset needs to be regridded and which result to extract.
-    # Basically, if there is any error at all, try the other dataset. This could and should be improved!
-    try:
-        # Try regridding Verif onto UFS
-        regridder.regrid(var=verif_vars,
-                         lev=lev,
-                         time=time_range)
-
-        # Convert temporal coordinates to init_lead
-        regridder.align()
-
-        # Get VERIF dataset. lev has already been selected in resample.
-        verif_ds = regridder.aligned.retrieve(var=verif_vars,
-                                              time=time_range,
-                                              lead=leads,
-                                              initmonths=initmonth)
-
-        ufs_ds = ufs_data_reader.retrieve(var=ufs_vars,
-                                          lev=lev,
-                                          time=time_range,
-                                          lead=leads,  # Only consider first 4 leads.
-                                          initmonths=initmonth,
-                                          ens_avg=True)
-
-    except:
-        # UFS must be regridded onto Verif instead.
-        regridder.regrid(var=ufs_vars,
-                         lev=lev,
-                         time=time_range,
-                         ens_avg=True)
-
-        # lev has already been selected in regrid. same with ens_avg.
-        ufs_ds = regridder.regridded.retrieve(var=ufs_vars,
-                                              time=time_range,
-                                              lead=leads,  # Only consider first 4 leads.
-                                              initmonths=initmonth)
-
-        # Convert temporal coordinates to init_lead
-        regridder.align()
-
-        # lev has already been selected in resample.
-        verif_ds = regridder.aligned.retrieve(var=verif_vars,
-                                              time=time_range,
-                                              lead=leads,
-                                              initmonths=initmonth)
-    if ufs_scaling_factor is not None:
-        print('Scaling UFS data')
-        ufs_ds = ufs_ds * ufs_scaling_factor
-
-    if verif_scaling_factor is not None:
-        print('Scaling VERIF data')
-        verif_ds = verif_ds * verif_scaling_factor
+    # Extract Xarray datasets.
+    ds1 = data_reader1.dataset()
+    ds2 = data_reader2.dataset()
 
     # Subset Data based on these years
     # UFS
-    ufs_elnino_mask = (ufs_ds.init.dt.year.isin(elnino_years))
-    ufs_lanina_mask = (ufs_ds.init.dt.year.isin(lanina_years))
+    ds1_elnino_mask = (ds1.init.dt.year.isin(elnino_years))
+    ds1_lanina_mask = (ds1.init.dt.year.isin(lanina_years))
 
-    ufs_elnino_ds = ufs_ds.where(ufs_elnino_mask, drop=True)
-    ufs_lanina_ds = ufs_ds.where(ufs_lanina_mask, drop=True)
+    ds1_elnino = ds1.where(ds1_elnino_mask, drop=True)
+    ds1_lanina = ds1.where(ds1_lanina_mask, drop=True)
 
-    # Verif
-    verif_elnino_mask = (verif_ds.init.dt.year.isin(elnino_years))
-    verif_lanina_mask = (verif_ds.init.dt.year.isin(lanina_years))
+    # Verif (may also be UFS)
+    ds2_elnino_mask = (ds2.init.dt.year.isin(elnino_years))
+    ds2_lanina_mask = (ds2.init.dt.year.isin(lanina_years))
 
-    verif_elnino_ds = verif_ds.where(verif_elnino_mask, drop=True)
-    verif_lanina_ds = verif_ds.where(verif_lanina_mask, drop=True)
+    ds2_elnino = ds2.where(ds2_elnino_mask, drop=True)
+    ds2_lanina = ds2.where(ds2_lanina_mask, drop=True)
 
     # Confirm that we have perfectly matching forecast times.
-    n_verif_elnino = len(verif_elnino_ds.init.values) * len(verif_elnino_ds.lead.values)
-    n_ufs_elnino = len(ufs_elnino_ds.init.values) * len(ufs_elnino_ds.lead.values)
+    n_ds1_elnino = len(ds1_elnino.init.values) * len(ds1_elnino.lead.values)
+    n_ds2_elnino = len(ds2_elnino.init.values) * len(ds2_elnino.lead.values)
 
-    n_verif_lanina = len(verif_lanina_ds.init.values) * len(verif_lanina_ds.lead.values)
-    n_ufs_lanina = len(ufs_lanina_ds.init.values) * len(ufs_lanina_ds.lead.values)
+    n_ds1_lanina = len(ds1_lanina.init.values) * len(ds1_lanina.lead.values)
+    n_ds2_lanina = len(ds2_lanina.init.values) * len(ds2_lanina.lead.values)
 
     # Check
-    if n_verif_elnino != n_ufs_elnino or n_verif_lanina != n_ufs_lanina:
+    if n_ds1_elnino != n_ds2_elnino or n_ds1_lanina != n_ds2_lanina:
 
-        msg = "Something went wrong... VERIF data and UFS data don't have identical time periods."
+        msg = "Something went wrong... VERIF data and ds1 don't have identical time periods."
         raise ValueError(msg)
 
     if 'restoring effect' in statistics or 'stationary wave number' in statistics:
@@ -469,113 +375,138 @@ def prep_oni_datasets(statistics: Union[str, List[str]],
 
         # We must first check that U_WIND has been specified by the user.
         U_WIND_FOUND = False
-        for wind_set in verif_data_reader.WINDS:
-            if verif_var == wind_set['U_WIND']:
+        for wind_set in data_reader1.WINDS:
+
+            if var1[0] == wind_set['U_WIND']:
                 U_WIND_FOUND = True
+                use_this_var1 = var1[0]
+
+            if var1[1] == wind_set['U_WIND']:
+                U_WIND_FOUND = True
+                use_this_var1 = var1[1]
 
         if U_WIND_FOUND is False:
-            msg = f'restoring effect and/or stationary wave number require U wind component, got {verif_var}'
+            msg = f'restoring effect and/or stationary wave number require U wind component, got {var1}'
+            raise ValueError(msg)
+
+        # Do this again for ds2
+        U_WIND_FOUND = False
+        for wind_set in data_reader2.WINDS:
+
+            if var2[0] == wind_set['U_WIND']:
+                U_WIND_FOUND = True
+                use_this_var2 = var2[0]
+
+            if var2[1] == wind_set['U_WIND']:
+                U_WIND_FOUND = True
+                use_this_var2 = var2[1]
+
+        if U_WIND_FOUND is False:
+            msg = f'restoring effect and/or stationary wave number require U wind component, got {var2}'
             raise ValueError(msg)
 
         # Calculate UFS Beta* and Ks
-        ufs_elnino_ds = stats.calc_betastar_kwavenumber(ufs_elnino_ds, uvar=ufs_var)
-        ufs_lanina_ds = stats.calc_betastar_kwavenumber(ufs_lanina_ds, uvar=ufs_var)
+        ds1_elnino = stats.calc_betastar_kwavenumber(ds1_elnino, uvar=use_this_var1)
+        ds1_lanina = stats.calc_betastar_kwavenumber(ds1_lanina, uvar=use_this_var1)
 
         # VERIF VERIF Beta* and Ks
-        verif_elnino_ds = stats.calc_betastar_kwavenumber(verif_elnino_ds, uvar=verif_var)
-        verif_lanina_ds = stats.calc_betastar_kwavenumber(verif_lanina_ds, uvar=verif_var)
+        ds2_elnino = stats.calc_betastar_kwavenumber(ds2_elnino, uvar=use_this_var2)
+        ds2_lanina = stats.calc_betastar_kwavenumber(ds2_lanina, uvar=use_this_var2)
 
     if 'anomaly' in statistics:
         print("Calculating climatology statistics and anomalies.")
 
         # Compute climatology statistics
-        ufs_stats = stats.calc_climatology_anomaly(ufs_ds[[ufs_var]], area_mean=False)
-        verif_stats = stats.calc_climatology_anomaly(verif_ds[[verif_var]], area_mean=False)
+        ds1_stats = stats.calc_climatology_anomaly(ds1[[var1[0]]], area_mean=False)
+        ds2_stats = stats.calc_climatology_anomaly(ds2[[var2[0]]], area_mean=False)
 
         # Calculate UFS Anomaly
-        ufs_elnino_ds = stats.calc_anomaly(ds=ufs_elnino_ds, var=ufs_var, stats=ufs_stats)
-        ufs_lanina_ds = stats.calc_anomaly(ds=ufs_lanina_ds, var=ufs_var, stats=ufs_stats)
+        ds1_elnino = stats.calc_anomaly(ds=ds1_elnino, var=var1[0], stats=ds1_stats)
+        ds1_lanina = stats.calc_anomaly(ds=ds1_lanina, var=var1[0], stats=ds1_stats)
 
         # Calculate VERIF Anomaly
-        verif_elnino_ds = stats.calc_anomaly(ds=verif_elnino_ds, var=verif_var, stats=verif_stats)
-        verif_lanina_ds = stats.calc_anomaly(ds=verif_lanina_ds, var=verif_var, stats=verif_stats)
+        ds2_elnino = stats.calc_anomaly(ds=ds2_elnino, var=var2[0], stats=ds2_stats)
+        ds2_lanina = stats.calc_anomaly(ds=ds2_lanina, var=var2[0], stats=ds2_stats)
 
     if 'rossby wave source' in statistics:
 
         # RWS Components across entire data record.
         print('Calculating Rossby Wave Source (RWS) components.')
-        ufs_ds = rws.calc_rws_components(ufs_ds, ufs_vars[0], ufs_vars[1])
-        verif_ds = rws.calc_rws_components(verif_ds, verif_vars[0], verif_vars[1])
+        ds1 = rws.calc_rws_components(ds1, var1[0], var1[1])
+        ds2 = rws.calc_rws_components(ds2, var2[0], var2[1])
 
         # -----------
         # STATISTICS
         # -----------
         print('Calculating RWS component climatology statistics and anomalies.')
         # Climatologies
-        ufs_absvrt_stats = stats.calc_climatology_anomaly(ufs_ds[['absvrt']], area_mean=False)
-        ufs_uchi_stats = stats.calc_climatology_anomaly(ufs_ds[['uchi']], area_mean=False)
-        ufs_vchi_stats = stats.calc_climatology_anomaly(ufs_ds[['vchi']], area_mean=False)
+        ds1_absvrt_stats = stats.calc_climatology_anomaly(ds1[['absvrt']], area_mean=False)
+        ds1_uchi_stats = stats.calc_climatology_anomaly(ds1[['uchi']], area_mean=False)
+        ds1_vchi_stats = stats.calc_climatology_anomaly(ds1[['vchi']], area_mean=False)
 
-        verif_absvrt_stats = stats.calc_climatology_anomaly(verif_ds[['absvrt']], area_mean=False)
-        verif_uchi_stats = stats.calc_climatology_anomaly(verif_ds[['uchi']], area_mean=False)
-        verif_vchi_stats = stats.calc_climatology_anomaly(verif_ds[['vchi']], area_mean=False)
+        ds2_absvrt_stats = stats.calc_climatology_anomaly(ds2[['absvrt']], area_mean=False)
+        ds2_uchi_stats = stats.calc_climatology_anomaly(ds2[['uchi']], area_mean=False)
+        ds2_vchi_stats = stats.calc_climatology_anomaly(ds2[['vchi']], area_mean=False)
 
         # Anomalies
-        ufs_absvrt_anomaly = stats.calc_anomaly(ds=ufs_ds, var='absvrt', stats=ufs_absvrt_stats)
-        ufs_uchi_anomaly = stats.calc_anomaly(ds=ufs_ds, var='uchi', stats=ufs_uchi_stats)
-        ufs_vchi_anomaly = stats.calc_anomaly(ds=ufs_ds, var='vchi', stats=ufs_vchi_stats)
+        ds1_absvrt_anomaly = stats.calc_anomaly(ds=ds1, var='absvrt', stats=ds1_absvrt_stats)
+        ds1_uchi_anomaly = stats.calc_anomaly(ds=ds1, var='uchi', stats=ds1_uchi_stats)
+        ds1_vchi_anomaly = stats.calc_anomaly(ds=ds1, var='vchi', stats=ds1_vchi_stats)
 
-        verif_absvrt_anomaly = stats.calc_anomaly(ds=verif_ds, var='absvrt', stats=verif_absvrt_stats)
-        verif_uchi_anomaly = stats.calc_anomaly(ds=verif_ds, var='uchi', stats=verif_uchi_stats)
-        verif_vchi_anomaly = stats.calc_anomaly(ds=verif_ds, var='vchi', stats=verif_vchi_stats)
+        ds2_absvrt_anomaly = stats.calc_anomaly(ds=ds2, var='absvrt', stats=ds2_absvrt_stats)
+        ds2_uchi_anomaly = stats.calc_anomaly(ds=ds2, var='uchi', stats=ds2_uchi_stats)
+        ds2_vchi_anomaly = stats.calc_anomaly(ds=ds2, var='vchi', stats=ds2_vchi_stats)
 
         # ---------------
         # END STATISTICS
         # ---------------
 
         # Compute RWS
-        ufs_elnino_ds = rws.calc_rws(ufs_elnino_ds,
-                                     absvrt_stats=ufs_absvrt_stats,  # Absolute Vorticity
-                                     absvrt_anomaly=ufs_absvrt_anomaly,
-                                     uchi_stats=ufs_uchi_stats,  # UCHI
-                                     uchi_anomaly=ufs_uchi_anomaly,
-                                     vchi_stats=ufs_vchi_stats,  # VCHI
-                                     vchi_anomaly=ufs_vchi_anomaly)
+        ds1_elnino = rws.calc_rws(ds1_elnino,
+                                  absvrt_stats=ds1_absvrt_stats,  # Absolute Vorticity
+                                  absvrt_anomaly=ds1_absvrt_anomaly,
+                                  uchi_stats=ds1_uchi_stats,  # UCHI
+                                  uchi_anomaly=ds1_uchi_anomaly,
+                                  vchi_stats=ds1_vchi_stats,  # VCHI
+                                  vchi_anomaly=ds1_vchi_anomaly)
 
-        ufs_lanina_ds = rws.calc_rws(ufs_lanina_ds,
-                                     absvrt_stats=ufs_absvrt_stats,  # Absolute Vorticity
-                                     absvrt_anomaly=ufs_absvrt_anomaly,
-                                     uchi_stats=ufs_uchi_stats,  # UCHI
-                                     uchi_anomaly=ufs_uchi_anomaly,
-                                     vchi_stats=ufs_vchi_stats,  # VCHI
-                                     vchi_anomaly=ufs_vchi_anomaly)
+        ds1_lanina = rws.calc_rws(ds1_lanina,
+                                  absvrt_stats=ds1_absvrt_stats,  # Absolute Vorticity
+                                  absvrt_anomaly=ds1_absvrt_anomaly,
+                                  uchi_stats=ds1_uchi_stats,  # UCHI
+                                  uchi_anomaly=ds1_uchi_anomaly,
+                                  vchi_stats=ds1_vchi_stats,  # VCHI
+                                  vchi_anomaly=ds1_vchi_anomaly)
 
-        verif_elnino_ds = rws.calc_rws(verif_elnino_ds,
-                                       absvrt_stats=verif_absvrt_stats,  # Absolute Vorticity
-                                       absvrt_anomaly=verif_absvrt_anomaly,
-                                       uchi_stats=verif_uchi_stats,  # UCHI
-                                       uchi_anomaly=verif_uchi_anomaly,
-                                       vchi_stats=verif_vchi_stats,  # VCHI
-                                       vchi_anomaly=verif_vchi_anomaly)
+        ds2_elnino = rws.calc_rws(ds2_elnino,
+                                  absvrt_stats=ds2_absvrt_stats,  # Absolute Vorticity
+                                  absvrt_anomaly=ds2_absvrt_anomaly,
+                                  uchi_stats=ds2_uchi_stats,  # UCHI
+                                  uchi_anomaly=ds2_uchi_anomaly,
+                                  vchi_stats=ds2_vchi_stats,  # VCHI
+                                  vchi_anomaly=ds2_vchi_anomaly)
 
-        verif_lanina_ds = rws.calc_rws(verif_lanina_ds,
-                                       absvrt_stats=verif_absvrt_stats,  # Absolute Vorticity
-                                       absvrt_anomaly=verif_absvrt_anomaly,
-                                       uchi_stats=verif_uchi_stats,  # UCHI
-                                       uchi_anomaly=verif_uchi_anomaly,
-                                       vchi_stats=verif_vchi_stats,  # VCHI
-                                       vchi_anomaly=verif_vchi_anomaly)
+        ds2_lanina = rws.calc_rws(ds2_lanina,
+                                  absvrt_stats=ds2_absvrt_stats,  # Absolute Vorticity
+                                  absvrt_anomaly=ds2_absvrt_anomaly,
+                                  uchi_stats=ds2_uchi_stats,  # UCHI
+                                  uchi_anomaly=ds2_uchi_anomaly,
+                                  vchi_stats=ds2_vchi_stats,  # VCHI
+                                  vchi_anomaly=ds2_vchi_anomaly)
 
     print("ONI Datasets Ready.")
 
-    return ufs_elnino_ds.load(), \
-        ufs_lanina_ds.load(), \
-        verif_elnino_ds.load(), \
-        verif_lanina_ds.load()
+    return ds1_elnino.load(), \
+        ds1_lanina.load(), \
+        ds2_elnino.load(), \
+        ds2_lanina.load()
 
 
 def plot_composite(da: xr.DataArray,
+                   shading: xr.DataArray = None,
+                   shading_threshold: float = 0.05,
                    title: str = '',
+                   subtitle: str = '',
                    vmin: float = None,
                    vmax: float = None,
                    cmap: str = 'BuPu',
@@ -583,10 +514,15 @@ def plot_composite(da: xr.DataArray,
                    topleft_label: str = None,
                    bottomright_label: str = None,
                    region: dict = None,
-                   subtitle: str = ''):
+                   dpi=200):
     '''
     Generate shaded contour plot for composite statistics.
     '''
+
+    # Drop lev dimension if it exists. Upstream logic has already confirmed that these data are flat.
+    if 'lev' in da.dims:
+        da = da.squeeze(dim='lev')
+
     cmap_center = False
     if vmin is not None and vmax is not None:
         if vmin == -1 * vmax:
@@ -598,7 +534,7 @@ def plot_composite(da: xr.DataArray,
     crs = ccrs.PlateCarree()
 
     # Instantiate plot
-    plt.figure(figsize=(14, 7), dpi=200)
+    plt.figure(figsize=(14, 7), dpi=dpi)
     ax = plt.axes(projection=projection)
     # ax.set_global()
 
@@ -738,7 +674,6 @@ def plot_composite(da: xr.DataArray,
     plt.title(f'{title}')
 
     # Add label to bottom right
-    # values_label = f'min:    {min_value:.3f}\nmean: {avg_value:.3f}\nmax:    {max_value:.3f}'
     lower_left_values_label = f'max:\nmin:'
     lower_left_values_text = f'{max_value:.3f}\n{min_value:.3f}'
 
@@ -758,10 +693,21 @@ def plot_composite(da: xr.DataArray,
     ax.text(1.000001, .99999, top_right_values_text, ha='right', va='bottom', fontweight='bold', transform=ax.transAxes)
 
     # Place title and subtitle
-    if subtitle.strip() == '':
-        plt.title(f'{title}')
-    else:
-        plt.title(f'{title}\n')
-        ax.text(0.5, 1, subtitle, ha='center', va='bottom', fontweight='bold', transform=ax.transAxes)
+    plt.title(f'{title}\n', pad=12)
+    ax.text(0.5, 1, subtitle, ha='center', va='bottom', fontweight='bold', transform=ax.transAxes)
+
+    # Add shaded layer based on threshold.
+    if shading is not None:
+
+        # Convert values to binary 0-1
+        shading = (shading <= shading_threshold).astype(int)
+
+        p = shading.plot.contourf(colors='None',
+                                  hatches=['', '...'],
+                                  levels=[0, 0.5, 1],
+                                  add_colorbar=False,
+                                  add_labels=False,
+                                  ax=ax,
+                                  transform=crs)
 
     return plt

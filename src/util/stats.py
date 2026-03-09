@@ -149,6 +149,12 @@ def radius(lat):
 
 def calc_betastar_kwavenumber(ds: xr.Dataset, uvar: str):
 
+    # If lev is a dimension in the data, then drop it temporarily, work on the underlying arrays, and add it back.
+    stored_lev = None
+    if 'lev' in ds.dims:
+        stored_lev = ds.lev.values[0]  # upstream logic has already confirmed that these data are flat.
+        ds = ds.squeeze(dim='lev')
+
     # Create a copy of the input dataset so we can include all data back in at the end.
     original_ds = ds.copy(deep=True)
 
@@ -282,6 +288,10 @@ def calc_betastar_kwavenumber(ds: xr.Dataset, uvar: str):
     # Apply the negative-U mask based on the overall mean U.
     final_result['Ks'] = final_result['Ks'].where(~neg_u_mask, drop=False)
 
+    # Add back lev, if it existed.
+    if stored_lev is not None:
+        final_result = final_result.expand_dims(lev=[stored_lev])
+
     return final_result
 
 
@@ -290,7 +300,8 @@ def plot_index_spaghetti(ufs_stats: dict,
                          calc_anomaly=True,
                          use_member_climatology=False,
                          title='',
-                         verif_label='Verification'):
+                         verif_label='Verification',
+                         dpi=300):
 
     '''
     This monster function plot Index and anomaly for UFS and Verif for up to multiple decades.
@@ -307,7 +318,7 @@ def plot_index_spaghetti(ufs_stats: dict,
     print(f'Generating {len(decade_batches)} panel(s).')
 
     # Instantiate Figure
-    fig, axs = plt.subplots(nrows=len(decade_batches), figsize=(12, 4 * len(decade_batches)), dpi=300)
+    fig, axs = plt.subplots(nrows=len(decade_batches), figsize=(12, 4 * len(decade_batches)), dpi=dpi)
 
     # Run this function once per decade-batch.
     def add_to_plot(this_decade_index,
@@ -797,18 +808,19 @@ def calc_rmse_spread(ufs_ds: xr.Dataset,
 
 
 def plot_rmse_spread(rmses: dict,
-                     ufs_models: list[str],
+                     ufs_experiments: list[str],
                      rmse_only: bool = False,
                      spread_only: bool = False,
                      verif_stats: dict = None,
-                     title=''):
+                     title='',
+                     dpi=300):
     '''
     rmses is a list of dictionaries.
     Each dict has 1 key per init month,
     and each value is a dictionary with 1 key per lead.
     '''
 
-    fig, ax = plt.subplots(figsize=(10, 5), dpi=300)
+    fig, ax = plt.subplots(figsize=(14, 7), dpi=dpi)
 
     # This works as long as there aren't > 5 UFS models to plot.
     # colors = ['#EE6677', '#4477AA', '#228833', '#CCBB44', '#AA3377', '#66CCEE']  # Paul Tol Bright
@@ -834,7 +846,7 @@ def plot_rmse_spread(rmses: dict,
 
                 this_label = None
                 if k == 0:
-                    this_label = f'RMSE {ufs_models[i]}'
+                    this_label = f'RMSE {ufs_experiments[i]}'
 
                 line_rmse, = ax.plot(x_values, y_values,
                                      color=colors[i],
@@ -857,7 +869,7 @@ def plot_rmse_spread(rmses: dict,
 
                 this_label = None
                 if k == 0:
-                    this_label = f'SPREAD {ufs_models[i]}'
+                    this_label = f'SPREAD {ufs_experiments[i]}'
 
                 line_spread, = ax.plot(x_values, y_values,
                                        color=colors[i],
